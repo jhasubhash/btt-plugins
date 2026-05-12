@@ -31,105 +31,24 @@ struct StockQuote {
 class StockPricesPlugin: NSObject, BTTLauncherPluginInterface {
     weak var delegate: (any BTTLauncherPluginDelegate)?
 
-    private var cachedQuotes: [String: StockQuote] = [:]
-    private var isLoading = false
-    private var lastFetch: Date?
-    private let cacheTTL: TimeInterval = 60
-    private let watchlist: [String] = ["ADBE","AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META"]
-
-    static func launcherPluginName() -> String { "Stock Prices" }
-    static func launcherPluginDescription() -> String { "Live stock prices. Type a ticker to look it up." }
+    static func launcherPluginName() -> String { "Stocks" }
+    static func launcherPluginDescription() -> String {
+        "Track stock prices and view detailed charts."
+    }
     static func launcherPluginIcon() -> String { "chart.line.uptrend.xyaxis" }
 
+    /// One root entry: "Stocks". Activating it pushes the watchlist surface,
+    /// which then handles add / delete / detail navigation in-place.
     func launcherResults(for context: BTTLauncherPluginContext) -> [BTTLauncherPluginResult]? {
-        let query = (context.query ?? "").uppercased().trimmingCharacters(in: .whitespaces)
-
-        let needsRefresh = lastFetch == nil || Date().timeIntervalSince(lastFetch!) > cacheTTL
-        if needsRefresh && !isLoading {
-            refreshAll()
-        }
-
-        var symbols = watchlist
-        if !query.isEmpty {
-            symbols = watchlist.filter { $0.hasPrefix(query) }
-        }
-
-        var results: [BTTLauncherPluginResult] = []
-
-        for symbol in symbols {
-            let r = BTTLauncherPluginResult()
-            r.itemIdentifier = "stock-\(symbol)"
-            r.keywords = [symbol]
-
-            if let q = cachedQuotes[symbol] {
-                r.title = "\(symbol)   \(q.priceString)"
-                r.subtitle = "\(q.name)  ·  \(q.changeString)"
-                r.systemImageName = q.isPositive
-                    ? "arrow.up.right.circle.fill"
-                    : "arrow.down.left.circle.fill"
-                r.surfaceIdentifier = "detail-\(symbol)"
-                r.trailingHint = q.isPositive ? "▲" : "▼"
-            } else {
-                r.title = symbol
-                r.subtitle = isLoading ? "Fetching price…" : "Price unavailable – tap Refresh"
-                r.systemImageName = "chart.bar.fill"
-                r.trailingHint = ""
-            }
-
-            let refreshCmd = BTTLauncherPluginCommand()
-            refreshCmd.commandIdentifier = "cmd-refresh"
-            refreshCmd.title = "Refresh All"
-            refreshCmd.systemImageName = "arrow.clockwise"
-            let sc = BTTLauncherPluginShortcut()
-            sc.character = "r"
-            sc.modifierFlags = [.command]
-            sc.displayKeys = ["⌘", "R"]
-            refreshCmd.shortcut = sc
-            refreshCmd.closesLauncherOnSuccess = false
-            r.commands = [refreshCmd]
-
-            results.append(r)
-        }
-
-        // Footer refresh row
-        let refreshRow = BTTLauncherPluginResult()
-        refreshRow.itemIdentifier = "action-refresh-all"
-        refreshRow.title = isLoading ? "Refreshing prices…" : "Refresh All Prices"
-        if let lf = lastFetch {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "h:mm a"
-            refreshRow.subtitle = "Last updated: \(fmt.string(from: lf))"
-        } else {
-            refreshRow.subtitle = "Prices not yet loaded"
-        }
-        refreshRow.systemImageName = isLoading ? "hourglass" : "arrow.clockwise.circle.fill"
-        refreshRow.primaryActionIdentifier = "action-refresh-all"
-        refreshRow.trailingHint = "↩"
-        results.append(refreshRow)
-
-        return results
-    }
-
-    func performAction(
-        forItemIdentifier itemIdentifier: String,
-        actionIdentifier: String?,
-        context: BTTLauncherPluginContext
-    ) -> BTTLauncherPluginActionResult? {
-        let ar = BTTLauncherPluginActionResult()
-        ar.closeLauncher = false
-
-        let isRefresh = itemIdentifier == "action-refresh-all"
-            || actionIdentifier == "action-refresh-all"
-            || actionIdentifier == "cmd-refresh"
-
-        if isRefresh {
-            refreshAll()
-            ar.success = true
-            ar.message = "Refreshing stock prices…"
-        } else {
-            ar.success = true
-        }
-        return ar
+        let r = BTTLauncherPluginResult()
+        r.itemIdentifier = "stocks-root"
+        r.title = "Stocks"
+        r.subtitle = "Track stock prices and view detailed charts"
+        r.systemImageName = "chart.line.uptrend.xyaxis"
+        r.surfaceIdentifier = "stocks-root"
+        r.trailingHint = "↩"
+        r.keywords = ["stocks", "stock", "ticker", "watchlist", "prices"]
+        return [r]
     }
 
     func launcherSurface(
@@ -137,98 +56,67 @@ class StockPricesPlugin: NSObject, BTTLauncherPluginInterface {
         surfaceIdentifier: String?,
         context: BTTLauncherPluginContext
     ) -> (any BTTLauncherPluginSurfaceInterface)? {
-        let symbol = itemIdentifier.replacingOccurrences(of: "stock-", with: "")
-        guard let q = cachedQuotes[symbol] else { return nil }
-        return StockDetailSurface(quote: q)
+        return StocksRootSurface()
     }
+}
 
-    // MARK: - Fetch
+// MARK: - Quote fetch (free helper, used by both watchlist + detail views)
 
-    private func refreshAll() {
-        guard !isLoading else { return }
-        isLoading = true
-        delegate?.requestLauncherResultsRefresh()
+/// Fetches a single stock quote (price, name, prev close, daily history) from
+/// Yahoo Finance. Used by `StockWatchlistStore` for list rows; the detail
+/// view fetches its own range-specific chart separately.
+func fetchStockQuote(symbol: String, completion: @escaping (StockQuote?) -> Void) {
+    let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? symbol
+    let urlStr = "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?interval=1h&range=5d"
+    guard let url = URL(string: urlStr) else { completion(nil); return }
 
-        let symbols = watchlist
-        let group = DispatchGroup()
-        var fetched: [String: StockQuote] = [:]
-        let lock = NSLock()
+    var req = URLRequest(url: url)
+    req.setValue(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        forHTTPHeaderField: "User-Agent"
+    )
+    req.timeoutInterval = 10
 
-        for symbol in symbols {
-            group.enter()
-            fetchQuote(symbol: symbol) { q in
-                if let q = q {
-                    lock.lock(); fetched[symbol] = q; lock.unlock()
-                }
-                group.leave()
+    URLSession.shared.dataTask(with: req) { data, _, error in
+        guard let data, error == nil else { completion(nil); return }
+        do {
+            guard
+                let json  = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let chart = json["chart"] as? [String: Any],
+                let arr   = chart["result"] as? [[String: Any]],
+                let first = arr.first,
+                let meta  = first["meta"] as? [String: Any]
+            else { completion(nil); return }
+
+            let price     = meta["regularMarketPrice"] as? Double ?? 0
+            let prevClose = meta["chartPreviousClose"]  as? Double ?? price
+            let name      = (meta["longName"]  as? String)
+                         ?? (meta["shortName"] as? String)
+                         ?? symbol
+            let change    = price - prevClose
+            let pct       = prevClose != 0 ? (change / prevClose) * 100 : 0
+
+            var historicalPrices: [Double] = []
+            if let indicators = first["indicators"] as? [String: Any],
+               let quoteArr = indicators["quote"] as? [[String: Any]],
+               let q = quoteArr.first,
+               let closes = q["close"] as? [Any] {
+                historicalPrices = closes.compactMap { $0 as? Double }
             }
-        }
+            if !historicalPrices.isEmpty {
+                historicalPrices[historicalPrices.count - 1] = price
+            } else {
+                historicalPrices = [prevClose, price]
+            }
 
-        group.notify(queue: .main) { [weak self] in
-            guard let self else { return }
-            for (sym, q) in fetched { self.cachedQuotes[sym] = q }
-            self.lastFetch = Date()
-            self.isLoading = false
-            self.delegate?.requestLauncherResultsRefresh()
-        }
-    }
-
-    private func fetchQuote(symbol: String, completion: @escaping (StockQuote?) -> Void) {
-        let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? symbol
-        // Use 5d range with daily interval to get historical closes for the sparkline
-        let urlStr = "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?interval=1h&range=5d"
-        guard let url = URL(string: urlStr) else { completion(nil); return }
-
-        var req = URLRequest(url: url)
-        req.setValue(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            forHTTPHeaderField: "User-Agent"
-        )
-        req.timeoutInterval = 10
-
-        URLSession.shared.dataTask(with: req) { data, _, error in
-            guard let data, error == nil else { completion(nil); return }
-            do {
-                guard
-                    let json  = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let chart = json["chart"] as? [String: Any],
-                    let arr   = chart["result"] as? [[String: Any]],
-                    let first = arr.first,
-                    let meta  = first["meta"] as? [String: Any]
-                else { completion(nil); return }
-
-                let price     = meta["regularMarketPrice"] as? Double ?? 0
-                let prevClose = meta["chartPreviousClose"]  as? Double ?? price
-                let name      = (meta["longName"]  as? String)
-                             ?? (meta["shortName"] as? String)
-                             ?? symbol
-                let change    = price - prevClose
-                let pct       = prevClose != 0 ? (change / prevClose) * 100 : 0
-
-                // Extract historical closing prices (NSNull entries = market-closed days, filtered out)
-                var historicalPrices: [Double] = []
-                if let indicators = first["indicators"] as? [String: Any],
-                   let quoteArr = indicators["quote"] as? [[String: Any]],
-                   let q = quoteArr.first,
-                   let closes = q["close"] as? [Any] {
-                    historicalPrices = closes.compactMap { $0 as? Double }
-                }
-                // Replace last data point with the live price for accuracy
-                if !historicalPrices.isEmpty {
-                    historicalPrices[historicalPrices.count - 1] = price
-                } else {
-                    historicalPrices = [prevClose, price]
-                }
-
-                completion(StockQuote(
-                    symbol: symbol, name: name,
-                    price: price, change: change,
-                    changePercent: pct, timestamp: Date(),
-                    historicalPrices: historicalPrices
-                ))
-            } catch { completion(nil) }
-        }.resume()
-    }
+            completion(StockQuote(
+                symbol: symbol, name: name,
+                price: price, change: change,
+                changePercent: pct, timestamp: Date(),
+                historicalPrices: historicalPrices
+            ))
+        } catch { completion(nil) }
+    }.resume()
 }
 
 // MARK: - Chart Range
@@ -287,9 +175,9 @@ private enum StockSurfaceSize {
     static let widthKey  = "com.bttuserplugin.stocks.surfaceWidth"
     static let heightKey = "com.bttuserplugin.stocks.surfaceHeight"
 
-    static let defaultSize = CGSize(width: 560, height: 375)
+    static let defaultSize = CGSize(width: 600, height: 500)
     static let minWidth:  CGFloat = 420
-    static let minHeight: CGFloat = 280
+    static let minHeight: CGFloat = 320
     static let maxWidth:  CGFloat = 2000
     static let maxHeight: CGFloat = 1600
 
@@ -345,27 +233,52 @@ private final class ResizableHostingView<Root: View>: NSHostingView<Root> {
     deinit { removeResizeObserver() }
 }
 
-final class StockDetailSurface: NSObject, BTTLauncherPluginSurfaceInterface {
+final class StocksRootSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
-    private let quote: StockQuote
-
-    init(quote: StockQuote) { self.quote = quote }
+    private let store = StockWatchlistStore()
+    private let nav = StocksNavigation()
 
     func makeLauncherSurfaceView() -> NSView {
-        let view = ResizableHostingView(rootView: StockDetailView(quote: quote))
+        let view = ResizableHostingView(
+            rootView: StocksRootView(store: store, nav: nav)
+        )
         view.onSizeChanged = { size in StockSurfaceSize.save(size) }
         return view
     }
 
     func launcherSurfacePreferredContentSize() -> CGSize { StockSurfaceSize.load() }
-    func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
-    func launcherSurfaceFooterHint() -> String? { "Press Esc to go back" }
-
-    func launcherSurfaceStatusText() -> String? {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "h:mm:ss a"
-        return "Updated \(fmt.string(from: quote.timestamp))"
+    func launcherSurfaceMinimumContentSize() -> CGSize {
+        CGSize(width: StockSurfaceSize.minWidth, height: StockSurfaceSize.minHeight)
     }
+    func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
+    func launcherSurfaceFooterHint() -> String? {
+        nav.detailSymbol == nil ? "Press Esc to close" : "Press Esc to go back"
+    }
+
+    /// Intercept Esc when we're in the detail view so it pops back to the
+    /// watchlist instead of closing the whole surface. In the list view we
+    /// return `nil` so BTT applies its default behaviour (closes back to
+    /// the launcher main menu).
+    func handleLauncherInputCommand(
+        _ command: BTTLauncherPluginInputCommand
+    ) -> BTTLauncherPluginSurfaceCommandResult? {
+        guard command == .goBackOrClose, nav.detailSymbol != nil else {
+            return nil
+        }
+        nav.detailSymbol = nil
+        let result = BTTLauncherPluginSurfaceCommandResult()
+        result.handled = true
+        result.goBack = false
+        result.closeLauncher = false
+        return result
+    }
+}
+
+/// Tracks which symbol's detail view is currently shown (nil = list view).
+/// Lifted out of the SwiftUI view so the hosting surface can pop the detail
+/// from outside (e.g. Esc handler).
+final class StocksNavigation: ObservableObject {
+    @Published var detailSymbol: String? = nil
 }
 
 // MARK: - Sparkline Chart
@@ -912,5 +825,314 @@ struct StatTile: View {
                 .font(.system(size: 14, design: .rounded).weight(.semibold))
                 .foregroundColor(isAccent ? (pos ? .green : Color(red: 1.0, green: 0.3, blue: 0.3)) : .primary)
         }
+    }
+}
+
+// MARK: - Watchlist Store
+
+private let watchlistDefaultsKey = "com.bttuserplugin.stocks.watchlist"
+private let defaultWatchlist: [String] =
+    ["ADBE", "AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META"]
+
+/// User-managed list of tracked symbols + their cached quotes. Persists
+/// the symbol list to `UserDefaults` so additions/deletions survive
+/// across launches. All mutations are expected on the main thread
+/// (SwiftUI callbacks); background fetch results are hopped to main
+/// before publishing.
+final class StockWatchlistStore: ObservableObject {
+    @Published private(set) var symbols: [String]
+    @Published private(set) var quotes: [String: StockQuote] = [:]
+    @Published private(set) var isLoading: Bool = false
+    @Published private(set) var lastFetch: Date? = nil
+    @Published private(set) var loadingSymbols: Set<String> = []
+
+    init() {
+        if let saved = UserDefaults.standard.stringArray(forKey: watchlistDefaultsKey),
+           !saved.isEmpty {
+            self.symbols = saved.map { $0.uppercased() }
+        } else {
+            self.symbols = defaultWatchlist
+        }
+    }
+
+    // MARK: Mutations
+
+    /// Append a new symbol to the watchlist (no-op if duplicate or empty).
+    /// Returns true if the symbol was actually added.
+    @discardableResult
+    func add(_ raw: String) -> Bool {
+        let sym = raw.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sym.isEmpty, !symbols.contains(sym) else { return false }
+        symbols.append(sym)
+        persist()
+        fetchOne(sym)
+        return true
+    }
+
+    func remove(_ symbol: String) {
+        symbols.removeAll { $0 == symbol }
+        quotes.removeValue(forKey: symbol)
+        persist()
+    }
+
+    private func persist() {
+        UserDefaults.standard.set(symbols, forKey: watchlistDefaultsKey)
+    }
+
+    // MARK: Fetching
+
+    /// Refresh quotes for every tracked symbol in parallel.
+    func refreshAll() {
+        guard !isLoading else { return }
+        let symbolsToFetch = symbols
+        guard !symbolsToFetch.isEmpty else {
+            lastFetch = Date()
+            return
+        }
+        isLoading = true
+        var pending = symbolsToFetch.count
+        for sym in symbolsToFetch {
+            fetchStockQuote(symbol: sym) { [weak self] q in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let q = q { self.quotes[sym] = q }
+                    pending -= 1
+                    if pending == 0 {
+                        self.lastFetch = Date()
+                        self.isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
+    /// Refresh a single symbol's quote (used right after adding it).
+    func fetchOne(_ symbol: String) {
+        loadingSymbols.insert(symbol)
+        fetchStockQuote(symbol: symbol) { [weak self] q in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.loadingSymbols.remove(symbol)
+                if let q = q { self.quotes[symbol] = q }
+            }
+        }
+    }
+}
+
+// MARK: - Stocks Root View (list + detail)
+
+/// Top-level view shown by `StocksRootSurface`. Hosts both the watchlist and
+/// the per-symbol detail view; navigation between the two is internal state
+/// because BTT has no surface-stack API.
+struct StocksRootView: View {
+    @ObservedObject var store: StockWatchlistStore
+    @ObservedObject var nav: StocksNavigation
+    @State private var isAdding: Bool = false
+    @State private var addText: String = ""
+    @State private var addError: String? = nil
+    @FocusState private var addFieldFocused: Bool
+
+    var body: some View {
+        Group {
+            if let sym = nav.detailSymbol, let q = store.quotes[sym] {
+                StockDetailView(quote: q)
+            } else {
+                listView
+            }
+        }
+        .onAppear {
+            // Refresh on first appear; no-op while a refresh is in flight.
+            if store.lastFetch == nil { store.refreshAll() }
+        }
+    }
+
+    // MARK: Watchlist list
+
+    private var listView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            // Header
+            HStack(spacing: 10) {
+                Text("Stocks")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                if let lf = store.lastFetch {
+                    let fmt: DateFormatter = {
+                        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+                    }()
+                    Text("Updated \(fmt.string(from: lf))")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(action: { store.refreshAll() }) {
+                    Image(systemName: store.isLoading ? "hourglass" : "arrow.clockwise")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Refresh all")
+                .disabled(store.isLoading)
+
+                Button(action: toggleAdd) {
+                    Image(systemName: isAdding ? "xmark.circle.fill" : "plus.circle.fill")
+                        .font(.system(size: 17))
+                        .foregroundColor(.accentColor)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(isAdding ? "Cancel" : "Add stock")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            // Inline add row
+            if isAdding {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        TextField("Symbol (e.g. AAPL)", text: $addText)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($addFieldFocused)
+                            .onSubmit { commitAdd() }
+                            .onChange(of: addText) { _ in addError = nil }
+                        Button("Add") { commitAdd() }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(addText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    if let err = addError {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
+
+            Divider()
+
+            // Watchlist
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(store.symbols, id: \.self) { sym in
+                        StockRowView(
+                            symbol: sym,
+                            quote: store.quotes[sym],
+                            isLoading: store.loadingSymbols.contains(sym)
+                                || (store.quotes[sym] == nil && store.isLoading),
+                            onSelect: {
+                                if store.quotes[sym] != nil { nav.detailSymbol = sym }
+                            },
+                            onDelete: { store.remove(sym) }
+                        )
+                        Divider()
+                    }
+                    if store.symbols.isEmpty {
+                        Text("No stocks tracked yet. Click + to add one.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(40)
+                    }
+                }
+            }
+        }
+    }
+
+    private func toggleAdd() {
+        isAdding.toggle()
+        addText = ""
+        addError = nil
+        if isAdding {
+            // Defer focus so the field exists when we set focus.
+            DispatchQueue.main.async { addFieldFocused = true }
+        }
+    }
+
+    private func commitAdd() {
+        let sym = addText.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sym.isEmpty else { return }
+        if store.symbols.contains(sym) {
+            addError = "\(sym) is already in your watchlist."
+            return
+        }
+        _ = store.add(sym)
+        addText = ""
+        addError = nil
+        isAdding = false
+    }
+}
+
+// MARK: - Stock Row
+
+struct StockRowView: View {
+    let symbol: String
+    let quote: StockQuote?
+    let isLoading: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+
+    private var accent: Color {
+        guard let q = quote else { return .secondary }
+        return q.isPositive ? .green : Color(red: 1.0, green: 0.3, blue: 0.3)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .font(.system(size: 18))
+                .foregroundColor(accent)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(symbol)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                Text(quote?.name ?? (isLoading ? "Loading…" : "Price unavailable"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if let q = quote {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(q.priceString)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    Text(String(format: "%+.2f%%", q.changePercent))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(accent)
+                }
+            } else if isLoading {
+                ProgressView().scaleEffect(0.5)
+            }
+
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+                    .opacity(isHovered ? 1 : 0)
+            }
+            .buttonStyle(.plain)
+            .help("Remove from watchlist")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture { onSelect() }
+    }
+
+    private var iconName: String {
+        guard let q = quote else { return "circle.dashed" }
+        return q.isPositive ? "arrow.up.right.circle.fill"
+                            : "arrow.down.left.circle.fill"
     }
 }
