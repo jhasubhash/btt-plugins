@@ -546,9 +546,72 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
             case 125: self.onMoveDown?();      return nil   // ↓
             case 126: self.onMoveUp?();        return nil   // ↑
             case 36, 76: self.onSelectCurrent?(); return nil // Return / numpad Enter
-            default: return event
+            default:
+                // Redirect typed characters to the launcher's search field that
+                // lives outside our hosting view, so the user can start typing
+                // from anywhere in the surface without clicking the search box.
+                if self.redirectTypedCharacterToLauncherSearch(event) {
+                    return nil
+                }
+                return event
             }
         }
+    }
+
+    /// If the event is a printable character (no Command/Control/Option) and
+    /// the launcher's external search field can be found, focus it and insert
+    /// the character. Returns `true` when the event was redirected.
+    private func redirectTypedCharacterToLauncherSearch(_ event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Allow plain typing and Shift-typing; ignore ⌘/⌃/⌥ shortcuts.
+        if mods.contains(.command) || mods.contains(.control) || mods.contains(.option) {
+            return false
+        }
+        guard let chars = event.charactersIgnoringModifiers,
+              !chars.isEmpty,
+              let scalar = chars.unicodeScalars.first,
+              CharacterSet.alphanumerics.union(.punctuationCharacters)
+                  .union(.symbols).union(.whitespaces).contains(scalar) else {
+            return false
+        }
+        guard let window = self.window,
+              let searchField = self.findLauncherSearchField(in: window.contentView) else {
+            return false
+        }
+        // Focus the search field and forward the typed character into it.
+        window.makeFirstResponder(searchField)
+        if let editor = searchField.currentEditor() {
+            editor.insertText(event.characters ?? chars)
+        } else {
+            searchField.stringValue.append(event.characters ?? chars)
+        }
+        return true
+    }
+
+    /// Walks the window's view hierarchy looking for an `NSTextField` that is
+    /// NOT inside our hosting view. The launcher's search box matches this.
+    private func findLauncherSearchField(in root: NSView?) -> NSTextField? {
+        guard let root else { return nil }
+        if root === self { return nil }
+        if let tf = root as? NSTextField, tf.isEditable, !tf.isHidden,
+           !self.contains(view: tf) {
+            return tf
+        }
+        for sub in root.subviews {
+            if sub === self { continue }
+            if let found = findLauncherSearchField(in: sub) { return found }
+        }
+        return nil
+    }
+
+    /// True iff `view` lives anywhere in the subtree rooted at `self`.
+    private func contains(view: NSView) -> Bool {
+        var v: NSView? = view
+        while let candidate = v {
+            if candidate === self { return true }
+            v = candidate.superview
+        }
+        return false
     }
 
     private func removeMonitor() {
@@ -791,6 +854,12 @@ final class JiraMainViewModel: ObservableObject {
             self.errorMessage = state.error
             self.lastUpdated = state.lastFetchTime
             self.isLoading = false
+            // Pre-select the first row once the list is populated so
+            // keyboard navigation works immediately, even if the user
+            // pressed arrow keys while the fetch was in flight.
+            if self.selectedIssueKey == nil, let first = self.filteredIssues.first {
+                self.selectedIssueKey = first.key
+            }
         }
     }
 

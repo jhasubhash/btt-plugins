@@ -22,7 +22,6 @@ struct GitHubPR: Identifiable {
 
 // MARK: - ViewModel
 
-@MainActor
 class PRViewModel: ObservableObject {
     @Published var myPRs: [GitHubPR] = []
     @Published var reviewPRs: [GitHubPR] = []
@@ -72,6 +71,12 @@ class PRViewModel: ObservableObject {
 
         isLoading = false
         lastRefreshed = Date()
+        // Pre-select the first PR once the list is populated so keyboard
+        // navigation works immediately, even if the user pressed arrow keys
+        // while the fetch was in flight.
+        if selectedPRId == nil, let first = allFiltered.first {
+            selectedPRId = first.id
+        }
     }
 
     private func parsePRs(_ data: Data) -> [GitHubPR] {
@@ -289,8 +294,7 @@ struct PRSectionHeader: View {
 // MARK: - Dashboard
 
 struct PRDashboard: View {
-    @StateObject private var vm = PRViewModel()
-    let navProxy: NavigationProxy
+    @ObservedObject var vm: PRViewModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -410,12 +414,6 @@ struct PRDashboard: View {
             }
         }
         .frame(minWidth: 460, idealWidth: 500, minHeight: 280, idealHeight: 420)
-        .onAppear {
-            navProxy.navigateUp   = { MainActor.assumeIsolated { vm.navigateUp()   } }
-            navProxy.navigateDown = { MainActor.assumeIsolated { vm.navigateDown() } }
-            navProxy.openSelected = { MainActor.assumeIsolated { vm.openSelected() } }
-            navProxy.viewModelReady?(vm)
-        }
     }
 
     func timeStr(_ d: Date) -> String {
@@ -423,15 +421,6 @@ struct PRDashboard: View {
         f.dateFormat = "HH:mm"
         return f.string(from: d)
     }
-}
-
-// MARK: - Navigation Bridge
-
-final class NavigationProxy {
-    var navigateUp:    (() -> Void)?
-    var navigateDown:  (() -> Void)?
-    var openSelected:  (() -> Void)?
-    var viewModelReady: ((PRViewModel) -> Void)?
 }
 
 // MARK: - Focus-aware Hosting View
@@ -469,9 +458,64 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
             case 125: self.onMoveDown?();        return nil   // ↓
             case 126: self.onMoveUp?();          return nil   // ↑
             case 36, 76: self.onSelectCurrent?(); return nil  // Return / numpad Enter
-            default: return event
+            default:
+                if self.redirectTypedCharacterToLauncherSearch(event) {
+                    return nil
+                }
+                return event
             }
         }
+    }
+
+    /// If the event is a printable character (no Command/Control/Option) and
+    /// the launcher's external search field can be found, focus it and insert
+    /// the character. Returns `true` when the event was redirected.
+    private func redirectTypedCharacterToLauncherSearch(_ event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) || mods.contains(.control) || mods.contains(.option) {
+            return false
+        }
+        guard let chars = event.charactersIgnoringModifiers,
+              !chars.isEmpty,
+              let scalar = chars.unicodeScalars.first,
+              CharacterSet.alphanumerics.union(.punctuationCharacters)
+                  .union(.symbols).union(.whitespaces).contains(scalar) else {
+            return false
+        }
+        guard let window = self.window,
+              let searchField = self.findLauncherSearchField(in: window.contentView) else {
+            return false
+        }
+        window.makeFirstResponder(searchField)
+        if let editor = searchField.currentEditor() {
+            editor.insertText(event.characters ?? chars)
+        } else {
+            searchField.stringValue.append(event.characters ?? chars)
+        }
+        return true
+    }
+
+    private func findLauncherSearchField(in root: NSView?) -> NSTextField? {
+        guard let root else { return nil }
+        if root === self { return nil }
+        if let tf = root as? NSTextField, tf.isEditable, !tf.isHidden,
+           !self.contains(view: tf) {
+            return tf
+        }
+        for sub in root.subviews {
+            if sub === self { continue }
+            if let found = findLauncherSearchField(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private func contains(view: NSView) -> Bool {
+        var v: NSView? = view
+        while let candidate = v {
+            if candidate === self { return true }
+            v = candidate.superview
+        }
+        return false
     }
 
     private func removeMonitor() {
@@ -579,18 +623,20 @@ class GitHubPRLauncherPlugin: NSObject, BTTLauncherPluginInterface {
 final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
 
-    private var vm: PRViewModel?
+    private let vm = PRViewModel()
 
     func makeLauncherSurfaceView() -> NSView {
-        let navProxy = NavigationProxy()
-        let view = PRDashboard(navProxy: navProxy)
-        let hosting = FocusableHostingView(rootView: view)
-        hosting.onMoveUp        = { navProxy.navigateUp?() }
-        hosting.onMoveDown      = { navProxy.navigateDown?() }
-        hosting.onSelectCurrent = { navProxy.openSelected?() }
+        let hosting = FocusableHostingView(rootView: PRDashboard(vm: vm))
+        hosting.onMoveUp        = { [weak vm] in
+            DispatchQueue.main.async { vm?.navigateUp() }
+        }
+        hosting.onMoveDown      = { [weak vm] in
+            DispatchQueue.main.async { vm?.navigateDown() }
+        }
+        hosting.onSelectCurrent = { [weak vm] in
+            DispatchQueue.main.async { vm?.openSelected() }
+        }
         hosting.onSizeChanged   = { size in GitHubPRSurfaceSize.save(size) }
-        // Stash the VM so we can forward the launcher's search query into it.
-        navProxy.viewModelReady = { [weak self] vm in self?.vm = vm }
         return hosting
     }
 
@@ -603,8 +649,8 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
 
     func launcherSurfaceQueryDidChange(_ query: String?) {
         let q = query ?? ""
-        DispatchQueue.main.async { [weak self] in
-            self?.vm?.searchQuery = q
+        DispatchQueue.main.async { [weak vm] in
+            vm?.searchQuery = q
         }
     }
 }
