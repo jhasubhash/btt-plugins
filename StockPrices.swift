@@ -371,22 +371,30 @@ final class StockDetailSurface: NSObject, BTTLauncherPluginSurfaceInterface {
 // MARK: - Sparkline Chart
 
 struct SparklineView: View {
-    let prices: [Double]
+    /// Optional values — trailing `nil`s mean "no data yet" (e.g. intraday
+    /// 1D chart during a live trading session) and reserve x-axis space
+    /// without drawing a line over them.
+    let prices: [Double?]
     let isPositive: Bool
 
     @State private var hoverIndex: Int? = nil
 
     private var lineColor: Color { isPositive ? Color.green : Color(red: 1.0, green: 0.3, blue: 0.3) }
 
+    private var validValues: [Double] { prices.compactMap { $0 } }
+    private var firstValidIndex: Int? { prices.firstIndex(where: { $0 != nil }) }
+    private var lastValidIndex:  Int? { prices.lastIndex(where:  { $0 != nil }) }
+
     /// Compute the canvas-space point for data index `i` given view dimensions.
-    private func makePoint(_ i: Int, width: CGFloat, height: CGFloat) -> CGPoint {
-        let n      = prices.count
-        let minP   = prices.min()!
-        let maxP   = prices.max()!
-        let range  = (maxP - minP) == 0 ? 1.0 : (maxP - minP)
+    private func makePoint(_ i: Int, width: CGFloat, height: CGFloat) -> CGPoint? {
+        guard let v = prices[i] else { return nil }
+        let vals  = validValues
+        guard let minP = vals.min(), let maxP = vals.max() else { return nil }
+        let range = (maxP - minP) == 0 ? 1.0 : (maxP - minP)
+        let n     = prices.count
         let pad: CGFloat = 6
-        let x = pad + (width  - pad * 2) * CGFloat(i) / CGFloat(n - 1)
-        let y = (height - pad) - (height - pad * 2) * CGFloat((prices[i] - minP) / range)
+        let x = pad + (width  - pad * 2) * CGFloat(i) / CGFloat(max(n - 1, 1))
+        let y = (height - pad) - (height - pad * 2) * CGFloat((v - minP) / range)
         return CGPoint(x: x, y: y)
     }
 
@@ -399,44 +407,77 @@ struct SparklineView: View {
 
                 // ── Sparkline canvas (also draws the hover indicator) ──
                 Canvas { ctx, size in
-                    guard prices.count >= 2 else { return }
+                    let vals = validValues
+                    guard vals.count >= 2,
+                          let firstIdx = firstValidIndex,
+                          let lastIdx  = lastValidIndex
+                    else { return }
 
-                    let minP  = prices.min()!
-                    let maxP  = prices.max()!
+                    let minP  = vals.min()!
+                    let maxP  = vals.max()!
                     let range = (maxP - minP) == 0 ? 1.0 : (maxP - minP)
                     let n     = prices.count
                     let pad: CGFloat = 6
 
-                    func point(_ i: Int) -> CGPoint {
-                        let x = pad + (size.width  - pad * 2) * CGFloat(i) / CGFloat(n - 1)
+                    func point(_ i: Int) -> CGPoint? {
+                        guard let v = prices[i] else { return nil }
+                        let x = pad + (size.width  - pad * 2) * CGFloat(i) / CGFloat(max(n - 1, 1))
                         let y = (size.height - pad) - (size.height - pad * 2)
-                              * CGFloat((prices[i] - minP) / range)
+                              * CGFloat((v - minP) / range)
                         return CGPoint(x: x, y: y)
                     }
 
-                    // Build smooth bezier line
+                    // Build smooth bezier line across valid points only
                     var linePath = Path()
-                    linePath.move(to: point(0))
-                    for i in 1..<n {
-                        let prev = point(i - 1)
-                        let curr = point(i)
-                        let cp1 = CGPoint(x: (prev.x + curr.x) / 2, y: prev.y)
-                        let cp2 = CGPoint(x: (prev.x + curr.x) / 2, y: curr.y)
-                        linePath.addCurve(to: curr, control1: cp1, control2: cp2)
+                    var startedLine = false
+                    var prevPt: CGPoint? = nil
+                    for i in firstIdx...lastIdx {
+                        guard let curr = point(i) else {
+                            // gap — lift the pen, resume on next valid point
+                            startedLine = false
+                            prevPt = nil
+                            continue
+                        }
+                        if !startedLine {
+                            linePath.move(to: curr)
+                            startedLine = true
+                        } else if let prev = prevPt {
+                            let cp1 = CGPoint(x: (prev.x + curr.x) / 2, y: prev.y)
+                            let cp2 = CGPoint(x: (prev.x + curr.x) / 2, y: curr.y)
+                            linePath.addCurve(to: curr, control1: cp1, control2: cp2)
+                        }
+                        prevPt = curr
                     }
 
-                    // Gradient fill under line
-                    var fillPath = linePath
-                    let lastPt  = point(n - 1)
-                    let firstPt = point(0)
-                    fillPath.addLine(to: CGPoint(x: lastPt.x,  y: size.height))
-                    fillPath.addLine(to: CGPoint(x: firstPt.x, y: size.height))
-                    fillPath.closeSubpath()
+                    // Gradient fill under line — build explicitly so the
+                    // closing edges are exactly the verticals + bottom
+                    // (avoids stray diagonal artifacts from closeSubpath).
+                    if let firstPt = point(firstIdx), let lastPt = point(lastIdx) {
+                        var fillPath = Path()
+                        fillPath.move(to: CGPoint(x: firstPt.x, y: size.height))
+                        fillPath.addLine(to: firstPt)
+                        var fillPrev: CGPoint? = firstPt
+                        for i in (firstIdx + 1)...lastIdx {
+                            guard let curr = point(i) else { fillPrev = nil; continue }
+                            if let prev = fillPrev {
+                                let cp1 = CGPoint(x: (prev.x + curr.x) / 2, y: prev.y)
+                                let cp2 = CGPoint(x: (prev.x + curr.x) / 2, y: curr.y)
+                                fillPath.addCurve(to: curr, control1: cp1, control2: cp2)
+                            } else {
+                                // resuming after a gap — jump along bottom, then up
+                                fillPath.addLine(to: CGPoint(x: curr.x, y: size.height))
+                                fillPath.addLine(to: curr)
+                            }
+                            fillPrev = curr
+                        }
+                        fillPath.addLine(to: CGPoint(x: lastPt.x,  y: size.height))
+                        fillPath.closeSubpath()
 
-                    let fillColor = isPositive
-                        ? Color.green.opacity(0.12)
-                        : Color(red: 1.0, green: 0.3, blue: 0.3).opacity(0.12)
-                    ctx.fill(fillPath, with: .color(fillColor))
+                        let fillColor = isPositive
+                            ? Color.green.opacity(0.12)
+                            : Color(red: 1.0, green: 0.3, blue: 0.3).opacity(0.12)
+                        ctx.fill(fillPath, with: .color(fillColor))
+                    }
 
                     // Stroke the line
                     ctx.stroke(
@@ -445,16 +486,18 @@ struct SparklineView: View {
                         style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
                     )
 
-                    // Glowing dot at last (current) price point
-                    let last     = point(n - 1)
-                    let outerRect = CGRect(x: last.x - 6,   y: last.y - 6,   width: 12, height: 12)
-                    let innerRect = CGRect(x: last.x - 3.5, y: last.y - 3.5, width: 7,  height: 7)
-                    ctx.fill(Path(ellipseIn: outerRect), with: .color(lineColor.opacity(0.25)))
-                    ctx.fill(Path(ellipseIn: innerRect),  with: .color(lineColor))
+                    // Glowing dot at last (current) valid price point
+                    if let last = point(lastIdx) {
+                        let outerRect = CGRect(x: last.x - 6,   y: last.y - 6,   width: 12, height: 12)
+                        let innerRect = CGRect(x: last.x - 3.5, y: last.y - 3.5, width: 7,  height: 7)
+                        ctx.fill(Path(ellipseIn: outerRect), with: .color(lineColor.opacity(0.25)))
+                        ctx.fill(Path(ellipseIn: innerRect),  with: .color(lineColor))
+                    }
 
                     // ── Hover: dashed crosshair + snapped dot ────────────
-                    if let idx = hoverIndex, prices.indices.contains(idx) {
-                        let pt = point(idx)
+                    if let idx = hoverIndex,
+                       prices.indices.contains(idx),
+                       let pt = point(idx) {
 
                         // Vertical dashed crosshair
                         var crosshair = Path()
@@ -472,12 +515,14 @@ struct SparklineView: View {
                 }
 
                 // ── Floating price label ─────────────────────────────────
-                if let idx = hoverIndex, prices.indices.contains(idx) {
-                    let pt     = makePoint(idx, width: w, height: h)
+                if let idx = hoverIndex,
+                   prices.indices.contains(idx),
+                   let v  = prices[idx],
+                   let pt = makePoint(idx, width: w, height: h) {
                     let labelX = min(max(pt.x, 30), w - 30)
                     let labelY = max(pt.y - 22, 14)
 
-                    Text(String(format: "$%.2f", prices[idx]))
+                    Text(String(format: "$%.2f", v))
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundColor(.primary)
                         .padding(.horizontal, 7)
@@ -495,10 +540,15 @@ struct SparklineView: View {
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let loc):
-                    guard prices.count >= 2 else { break }
+                    guard prices.count >= 2,
+                          let firstIdx = firstValidIndex,
+                          let lastIdx  = lastValidIndex
+                    else { break }
                     let pad: CGFloat = 6
                     let rawIdx = (loc.x - pad) / (w - pad * 2) * CGFloat(prices.count - 1)
-                    hoverIndex = max(0, min(prices.count - 1, Int(rawIdx.rounded())))
+                    let clamped = max(firstIdx, min(lastIdx, Int(rawIdx.rounded())))
+                    // snap to nearest valid index (skip any nil gaps)
+                    hoverIndex = prices[clamped] != nil ? clamped : lastIdx
                 case .ended:
                     hoverIndex = nil
                 }
@@ -513,7 +563,7 @@ struct StockDetailView: View {
     let quote: StockQuote
 
     @State private var selectedRange: StockRange = .oneDay
-    @State private var chartPrices:   [Double]
+    @State private var chartPrices:   [Double?]
     @State private var isFetchingChart = true
 
     init(quote: StockQuote) {
@@ -521,8 +571,28 @@ struct StockDetailView: View {
         self._chartPrices = State(initialValue: [])
     }
 
+    // ── Range-aware change ────────────────────────────────────────
+    // Change/Change% are computed against the first point of the currently
+    // selected range so they reflect what the chart is showing.
+    // Prev Close is intentionally NOT range-aware — it always reports the
+    // previous trading day's close from the initial quote fetch.
+    private var validChartPrices: [Double] { chartPrices.compactMap { $0 } }
+    private var rangeBaseline: Double? {
+        validChartPrices.count >= 2 ? validChartPrices.first : nil
+    }
+    private var rangeChange: Double {
+        guard let base = rangeBaseline else { return quote.change }
+        return quote.price - base
+    }
+    private var rangeChangePercent: Double {
+        guard let base = rangeBaseline, base != 0 else { return quote.changePercent }
+        return (rangeChange / base) * 100
+    }
+    private var rangeIsPositive: Bool { rangeChange >= 0 }
+    private var prevTradingDayClose: Double { quote.price - quote.change }
+
     private var accentColor: Color {
-        quote.isPositive ? .green : Color(red: 1.0, green: 0.3, blue: 0.3)
+        rangeIsPositive ? .green : Color(red: 1.0, green: 0.3, blue: 0.3)
     }
 
     var body: some View {
@@ -544,9 +614,9 @@ struct StockDetailView: View {
                         .font(.system(size: 30, weight: .semibold, design: .rounded))
                     // Pill badge
                     HStack(spacing: 3) {
-                        Image(systemName: quote.isPositive ? "arrow.up.right" : "arrow.down.left")
+                        Image(systemName: rangeIsPositive ? "arrow.up.right" : "arrow.down.left")
                             .font(.system(size: 9, weight: .bold))
-                        Text(String(format: "%+.2f  (%+.2f%%)", quote.change, quote.changePercent))
+                        Text(String(format: "%+.2f  (%+.2f%%)", rangeChange, rangeChangePercent))
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .foregroundColor(accentColor)
@@ -560,8 +630,8 @@ struct StockDetailView: View {
 
             // ── Sparkline ────────────────────────────────────────────
             ZStack {
-                if chartPrices.count >= 2 {
-                    SparklineView(prices: chartPrices, isPositive: quote.isPositive)
+                if validChartPrices.count >= 2 {
+                    SparklineView(prices: chartPrices, isPositive: rangeIsPositive)
                         .opacity(isFetchingChart ? 0.4 : 1.0)
                         .animation(.easeInOut(duration: 0.15), value: isFetchingChart)
                 } else {
@@ -606,11 +676,11 @@ struct StockDetailView: View {
 
             // ── Stats row ────────────────────────────────────────────
             HStack(spacing: 0) {
-                StatTile(label: "Change",    value: String(format: "%+.2f",   quote.change),        isAccent: true, pos: quote.isPositive)
+                StatTile(label: "Change",    value: String(format: "%+.2f",   rangeChange),        isAccent: true, pos: rangeIsPositive)
                 Spacer()
-                StatTile(label: "Change %",  value: String(format: "%+.2f%%", quote.changePercent), isAccent: true, pos: quote.isPositive)
+                StatTile(label: "Change %",  value: String(format: "%+.2f%%", rangeChangePercent), isAccent: true, pos: rangeIsPositive)
                 Spacer()
-                StatTile(label: "Prev Close", value: String(format: "$%.2f", quote.price - quote.change), isAccent: false, pos: true)
+                StatTile(label: "Prev Close", value: String(format: "$%.2f", prevTradingDayClose), isAccent: false, pos: true)
                 Spacer()
                 StatTile(label: "Price",     value: quote.priceString,                               isAccent: false, pos: true)
             }
@@ -646,7 +716,10 @@ struct StockDetailView: View {
 
         do {
             let (data, _) = try await URLSession.shared.data(for: req)
-            var prices: [Double] = []
+            var prices: [Double?] = []
+            var tradingDayStart: TimeInterval? = nil
+            var tradingDayEnd:   TimeInterval? = nil
+            var timestamps: [TimeInterval] = []
             if let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let chart  = json["chart"]        as? [String: Any],
                let arr    = chart["result"]       as? [[String: Any]],
@@ -655,10 +728,46 @@ struct StockDetailView: View {
                let qArr   = indic["quote"]        as? [[String: Any]],
                let q      = qArr.first,
                let closes = q["close"]            as? [Any] {
-                prices = closes.compactMap { $0 as? Double }
+                // Preserve trailing NSNull entries — they reserve x-axis space
+                // for the remainder of an in-progress 1D trading session.
+                prices = closes.map { $0 as? Double }
+                if let ts = first["timestamp"] as? [Any] {
+                    timestamps = ts.compactMap {
+                        if let i = $0 as? Int    { return TimeInterval(i) }
+                        if let d = $0 as? Double { return d }
+                        return nil
+                    }
+                }
+                if let meta = first["meta"] as? [String: Any],
+                   let period = (meta["currentTradingPeriod"] as? [String: Any])?["regular"]
+                              as? [String: Any] {
+                    if let s = period["start"] as? Int    { tradingDayStart = TimeInterval(s) }
+                    if let s = period["start"] as? Double { tradingDayStart = s }
+                    if let e = period["end"]   as? Int    { tradingDayEnd   = TimeInterval(e) }
+                    if let e = period["end"]   as? Double { tradingDayEnd   = e }
+                }
             }
+
+            // ── 1D padding: Yahoo only returns bars up to "now" during a
+            // live trading session. Pad with trailing nils so the x-axis
+            // spans the full regular trading day (matches Google Finance).
+            if range == .oneDay,
+               let start = tradingDayStart,
+               let end   = tradingDayEnd,
+               end > start,
+               !prices.isEmpty,
+               timestamps.count == prices.count {
+                let interval: TimeInterval = 5 * 60  // matches intervalParam "5m"
+                let totalSlots = max(prices.count,
+                                     Int(((end - start) / interval).rounded(.up)))
+                if totalSlots > prices.count {
+                    prices.append(contentsOf:
+                        Array<Double?>(repeating: nil, count: totalSlots - prices.count))
+                }
+            }
+
             await MainActor.run {
-                if !prices.isEmpty { chartPrices = prices }
+                if prices.contains(where: { $0 != nil }) { chartPrices = prices }
                 isFetchingChart = false
             }
         } catch {
