@@ -47,6 +47,34 @@ private enum JiraDefaults {
     }
 }
 
+/// Persists the user's preferred main-surface size across launches.
+private enum JiraSurfaceSize {
+    static let widthKey  = "com.bttuserplugin.jira.surfaceWidth"
+    static let heightKey = "com.bttuserplugin.jira.surfaceHeight"
+
+    static let defaultSize  = CGSize(width: 860, height: 620)
+    static let minWidth:  CGFloat = 480
+    static let minHeight: CGFloat = 320
+    static let maxWidth:  CGFloat = 2000
+    static let maxHeight: CGFloat = 1600
+
+    static func load() -> CGSize {
+        let w = UserDefaults.standard.object(forKey: widthKey)  as? CGFloat
+        let h = UserDefaults.standard.object(forKey: heightKey) as? CGFloat
+        guard let w, let h else { return defaultSize }
+        return CGSize(
+            width:  min(maxWidth,  max(minWidth,  w)),
+            height: min(maxHeight, max(minHeight, h))
+        )
+    }
+
+    static func save(_ size: CGSize) {
+        guard size.width >= minWidth, size.height >= minHeight else { return }
+        UserDefaults.standard.set(size.width,  forKey: widthKey)
+        UserDefaults.standard.set(size.height, forKey: heightKey)
+    }
+}
+
 // MARK: - Plugin
 
 class JiraLauncherPlugin: NSObject, BTTLauncherPluginInterface {
@@ -487,16 +515,22 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
     var onMoveUp: (() -> Void)?
     var onMoveDown: (() -> Void)?
     var onSelectCurrent: (() -> Void)?
+    /// Called whenever the host window's content size changes. The surface
+    /// uses this to persist the user's preferred size to UserDefaults.
+    var onSizeChanged: ((CGSize) -> Void)?
     private var eventMonitor: Any?
+    private var resizeObserver: NSObjectProtocol?
 
     override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
+        if let window = window {
             installMonitor()
+            installResizeObserver(on: window)
         } else {
             removeMonitor()
+            removeResizeObserver()
         }
     }
 
@@ -522,7 +556,24 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
         eventMonitor = nil
     }
 
-    deinit { removeMonitor() }
+    private func installResizeObserver(on window: NSWindow) {
+        removeResizeObserver()
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.onSizeChanged?(window.contentLayoutRect.size)
+        }
+    }
+
+    private func removeResizeObserver() {
+        if let token = resizeObserver { NotificationCenter.default.removeObserver(token) }
+        resizeObserver = nil
+    }
+
+    deinit { removeMonitor(); removeResizeObserver() }
 }
 
 // MARK: - Main Surface
@@ -570,10 +621,13 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
         hostingView.onMoveUp = { [weak vm] in DispatchQueue.main.async { vm?.navigateUp() } }
         hostingView.onMoveDown = { [weak vm] in DispatchQueue.main.async { vm?.navigateDown() } }
         hostingView.onSelectCurrent = { [weak vm] in DispatchQueue.main.async { vm?.openSelected() } }
+        hostingView.onSizeChanged = { size in
+            JiraSurfaceSize.save(size)
+        }
         return hostingView
     }
 
-    func launcherSurfacePreferredContentSize() -> CGSize { CGSize(width: 860, height: 620) }
+    func launcherSurfacePreferredContentSize() -> CGSize { JiraSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
     func launcherSurfacePlaceholderText() -> String? { "Jira" }
     func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  Cmd+R Refresh  |  Cmd+, Settings" }

@@ -282,6 +282,69 @@ enum StockRange: String, CaseIterable, Equatable {
 
 // MARK: - Detail Surface
 
+/// Persists the user's preferred detail-surface size across launches.
+private enum StockSurfaceSize {
+    static let widthKey  = "com.bttuserplugin.stocks.surfaceWidth"
+    static let heightKey = "com.bttuserplugin.stocks.surfaceHeight"
+
+    static let defaultSize = CGSize(width: 560, height: 375)
+    static let minWidth:  CGFloat = 420
+    static let minHeight: CGFloat = 280
+    static let maxWidth:  CGFloat = 2000
+    static let maxHeight: CGFloat = 1600
+
+    static func load() -> CGSize {
+        let w = UserDefaults.standard.object(forKey: widthKey)  as? CGFloat
+        let h = UserDefaults.standard.object(forKey: heightKey) as? CGFloat
+        guard let w, let h else { return defaultSize }
+        return CGSize(
+            width:  min(maxWidth,  max(minWidth,  w)),
+            height: min(maxHeight, max(minHeight, h))
+        )
+    }
+
+    static func save(_ size: CGSize) {
+        guard size.width >= minWidth, size.height >= minHeight else { return }
+        UserDefaults.standard.set(size.width,  forKey: widthKey)
+        UserDefaults.standard.set(size.height, forKey: heightKey)
+    }
+}
+
+/// `NSHostingView` subclass that reports host-window size changes so the
+/// surface can persist the user's resized dimensions.
+private final class ResizableHostingView<Root: View>: NSHostingView<Root> {
+    var onSizeChanged: ((CGSize) -> Void)?
+    private var resizeObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window = window {
+            installResizeObserver(on: window)
+        } else {
+            removeResizeObserver()
+        }
+    }
+
+    private func installResizeObserver(on window: NSWindow) {
+        removeResizeObserver()
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.onSizeChanged?(window.contentLayoutRect.size)
+        }
+    }
+
+    private func removeResizeObserver() {
+        if let token = resizeObserver { NotificationCenter.default.removeObserver(token) }
+        resizeObserver = nil
+    }
+
+    deinit { removeResizeObserver() }
+}
+
 final class StockDetailSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
     private let quote: StockQuote
@@ -289,10 +352,12 @@ final class StockDetailSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     init(quote: StockQuote) { self.quote = quote }
 
     func makeLauncherSurfaceView() -> NSView {
-        NSHostingView(rootView: StockDetailView(quote: quote))
+        let view = ResizableHostingView(rootView: StockDetailView(quote: quote))
+        view.onSizeChanged = { size in StockSurfaceSize.save(size) }
+        return view
     }
 
-    func launcherSurfacePreferredContentSize() -> CGSize { CGSize(width: 560, height: 375) }
+    func launcherSurfacePreferredContentSize() -> CGSize { StockSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
     func launcherSurfaceFooterHint() -> String? { "Press Esc to go back" }
 

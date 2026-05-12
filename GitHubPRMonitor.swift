@@ -440,13 +440,23 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
     var onMoveUp:        (() -> Void)?
     var onMoveDown:      (() -> Void)?
     var onSelectCurrent: (() -> Void)?
+    /// Called whenever the host window's content size changes. The surface
+    /// uses this to persist the user's preferred size to UserDefaults.
+    var onSizeChanged:   ((CGSize) -> Void)?
     private var eventMonitor: Any?
+    private var resizeObserver: NSObjectProtocol?
 
     override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { installMonitor() } else { removeMonitor() }
+        if let window = window {
+            installMonitor()
+            installResizeObserver(on: window)
+        } else {
+            removeMonitor()
+            removeResizeObserver()
+        }
     }
 
     private func installMonitor() {
@@ -469,7 +479,54 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
         eventMonitor = nil
     }
 
-    deinit { removeMonitor() }
+    private func installResizeObserver(on window: NSWindow) {
+        removeResizeObserver()
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.onSizeChanged?(window.contentLayoutRect.size)
+        }
+    }
+
+    private func removeResizeObserver() {
+        if let token = resizeObserver { NotificationCenter.default.removeObserver(token) }
+        resizeObserver = nil
+    }
+
+    deinit { removeMonitor(); removeResizeObserver() }
+}
+
+// MARK: - Persisted Surface Size
+
+/// Persists the user's preferred main-surface size across launches.
+private enum GitHubPRSurfaceSize {
+    static let widthKey  = "com.bttuserplugin.github.prmonitor.surfaceWidth"
+    static let heightKey = "com.bttuserplugin.github.prmonitor.surfaceHeight"
+
+    static let defaultSize = CGSize(width: 560, height: 460)
+    static let minWidth:  CGFloat = 460
+    static let minHeight: CGFloat = 280
+    static let maxWidth:  CGFloat = 2000
+    static let maxHeight: CGFloat = 1600
+
+    static func load() -> CGSize {
+        let w = UserDefaults.standard.object(forKey: widthKey)  as? CGFloat
+        let h = UserDefaults.standard.object(forKey: heightKey) as? CGFloat
+        guard let w, let h else { return defaultSize }
+        return CGSize(
+            width:  min(maxWidth,  max(minWidth,  w)),
+            height: min(maxHeight, max(minHeight, h))
+        )
+    }
+
+    static func save(_ size: CGSize) {
+        guard size.width >= minWidth, size.height >= minHeight else { return }
+        UserDefaults.standard.set(size.width,  forKey: widthKey)
+        UserDefaults.standard.set(size.height, forKey: heightKey)
+    }
 }
 
 // MARK: - Launcher Plugin
@@ -531,12 +588,13 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
         hosting.onMoveUp        = { navProxy.navigateUp?() }
         hosting.onMoveDown      = { navProxy.navigateDown?() }
         hosting.onSelectCurrent = { navProxy.openSelected?() }
+        hosting.onSizeChanged   = { size in GitHubPRSurfaceSize.save(size) }
         // Stash the VM so we can forward the launcher's search query into it.
         navProxy.viewModelReady = { [weak self] vm in self?.vm = vm }
         return hosting
     }
 
-    func launcherSurfacePreferredContentSize() -> CGSize { CGSize(width: 560, height: 460) }
+    func launcherSurfacePreferredContentSize() -> CGSize { GitHubPRSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned()  -> Bool   { true }
     func launcherSurfacePlaceholderText()      -> String? { "Filter PRs…" }
     func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  Esc Back" }
