@@ -21,6 +21,7 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
 
     private enum Actions {
         static let open = "open"
+        static let edit = "edit"
         static let copyURL = "copy-url"
         static let duplicate = "duplicate"
         static let delete = "delete"
@@ -76,6 +77,16 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         result.surfaceIdentifier = IDs.editorSurface
         result.launcherDisplayMode = NSNumber(value: configuration.displayMode)
         result.commands = [
+            command(
+                id: Actions.edit,
+                title: "Edit Quick Link",
+                subtitle: "Change the name, URL template, browser, icon, or display mode.",
+                systemImageName: "pencil",
+                character: "e",
+                modifiers: [.command],
+                closesLauncher: false,
+                surfaceIdentifier: IDs.editorSurface
+            ),
             command(
                 id: Actions.copyURL,
                 title: "Copy Resolved URL",
@@ -183,6 +194,7 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         character: String,
         modifiers: NSEvent.ModifierFlags,
         closesLauncher: Bool,
+        surfaceIdentifier: String? = nil,
         destructive: Bool = false
     ) -> BTTLauncherPluginCommand {
         let shortcut = BTTLauncherPluginShortcut()
@@ -196,6 +208,7 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         command.subtitle = subtitle
         command.systemImageName = systemImageName
         command.shortcut = shortcut
+        command.surfaceIdentifier = surfaceIdentifier
         command.closesLauncherOnSuccess = closesLauncher
         command.destructive = destructive
         return command
