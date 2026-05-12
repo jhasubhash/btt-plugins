@@ -237,6 +237,12 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         ) else {
             return nil
         }
+        // Filesystem path — build a file URL directly so it opens in the
+        // correct default app (Preview, Finder, …) rather than the browser.
+        if isFilesystemPath(urlString) {
+            let expanded = (urlString as NSString).expandingTildeInPath
+            return URL(fileURLWithPath: expanded)
+        }
         return URL(string: urlString)
     }
 
@@ -283,7 +289,18 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         if URLComponents(string: trimmedURLString)?.scheme != nil {
             return trimmedURLString
         }
+        // Don't slap https:// onto a filesystem path — leave it as-is so the
+        // caller can build a file URL.
+        if isFilesystemPath(trimmedURLString) {
+            return trimmedURLString
+        }
         return "https://\(trimmedURLString)"
+    }
+
+    /// True for absolute (`/...`), home-relative (`~/...`), or current-directory
+    /// (`./...`) filesystem paths.
+    private func isFilesystemPath(_ s: String) -> Bool {
+        s.hasPrefix("/") || s.hasPrefix("~/") || s.hasPrefix("./")
     }
 
     private func hostReplaceVariables(
@@ -584,13 +601,44 @@ private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceIn
 
     private func initialURLTemplate() -> String {
         let query = context.query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !query.isEmpty else {
-            return "https://google.com/search?q={argument}"
+        if !query.isEmpty {
+            if URLComponents(string: query)?.scheme != nil || query.contains(".") {
+                return query
+            }
         }
-        if URLComponents(string: query)?.scheme != nil || query.contains(".") {
-            return query
+        // Fall back to the clipboard if it currently holds a URL or a path —
+        // saves the user from manually pasting it into the link field.
+        if let clip = clipboardURLOrPath() {
+            return clip
         }
         return "https://google.com/search?q={argument}"
+    }
+
+    /// Returns the pasteboard string only if it looks like a URL (any scheme),
+    /// a domain-style host, or an absolute / `~`-rooted filesystem path.
+    /// Anything else (plain prose, code snippets, etc.) is ignored.
+    private func clipboardURLOrPath() -> String? {
+        guard let raw = NSPasteboard.general.string(forType: .string) else { return nil }
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, !s.contains("\n"), s.count <= 2048 else { return nil }
+
+        // Explicit URL with a scheme (https://, file://, ssh://, mailto:, …).
+        if let comps = URLComponents(string: s), let scheme = comps.scheme, !scheme.isEmpty {
+            return s
+        }
+        // Absolute / home-relative filesystem path.
+        if s.hasPrefix("/") || s.hasPrefix("~/") {
+            return s
+        }
+        // Bare domain like `example.com` or `example.com/path` — promote to https.
+        let firstToken = s.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? s
+        if firstToken.contains("."),
+           !firstToken.contains(" "),
+           firstToken.range(of: #"^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$"#,
+                            options: .regularExpression) != nil {
+            return "https://\(s)"
+        }
+        return nil
     }
 
     private func save(_ draft: QuickLinkEditorDraft) {
@@ -626,28 +674,76 @@ private struct QuickLinkBrowserChoice: Identifiable, Hashable {
     let title: String
     let bundleIdentifier: String?
 
-    static func installedChoices() -> [QuickLinkBrowserChoice] {
+    /// Coarse classification of an "Open With" target — web vs. file-system path,
+    /// and the type of file when it is a path. Drives which apps appear in the
+    /// editor's picker.
+    enum Kind: String {
+        case browser    // any web URL  → browsers (Dia first)
+        case image      // image file   → Preview, Photoshop, Pixelmator, Sketch
+        case textCode   // text / code  → Cursor, VS Code, Sublime, Xcode, …
+        case folder     // directory    → Finder, Cursor, VS Code, Terminal, iTerm
+        case file       // generic file → Default app, Finder
+    }
+
+    /// Returns the relevant subset of installed apps for the given link kind,
+    /// always starting with the system "Default" entry.
+    static func choices(for kind: Kind) -> [QuickLinkBrowserChoice] {
         var choices: [QuickLinkBrowserChoice] = [
-            QuickLinkBrowserChoice(id: "default", title: defaultBrowserTitle(), bundleIdentifier: nil)
+            QuickLinkBrowserChoice(id: "default", title: defaultTitle(for: kind), bundleIdentifier: nil)
         ]
-        let candidates = [
-            "com.apple.Safari",
-            "com.google.Chrome",
-            "com.google.Chrome.canary",
-            "org.mozilla.firefox",
-            "com.brave.Browser",
-            "com.microsoft.edgemac",
-            "company.thebrowser.Browser",
-            "company.thebrowser.dia",
-            "company.thebrowser.Dia"
-        ]
+        let bundles: [String]
+        switch kind {
+        case .browser:
+            // System default is already the first entry; list the rest in a
+            // neutral, popularity-ish order without elevating any one browser.
+            bundles = [
+                "com.apple.Safari",
+                "com.google.Chrome",
+                "company.thebrowser.Browser",
+                "company.thebrowser.dia",
+                "company.thebrowser.Dia",
+                "org.mozilla.firefox",
+                "com.brave.Browser",
+                "com.microsoft.edgemac",
+                "com.google.Chrome.canary",
+            ]
+        case .image:
+            bundles = [
+                "com.apple.Preview",
+                "com.adobe.Photoshop",
+                "com.pixelmatorteam.pixelmator.x",
+                "com.bohemiancoding.sketch3",
+                "com.figma.Desktop",
+                "com.apple.Photos",
+            ]
+        case .textCode:
+            bundles = [
+                "com.todesktop.230313mzl4w4u92",     // Cursor
+                "com.microsoft.VSCode",
+                "com.microsoft.VSCodeInsiders",
+                "com.sublimetext.4",
+                "com.sublimetext.3",
+                "com.apple.dt.Xcode",
+                "com.panic.Nova",
+                "com.barebones.bbedit",
+                "com.apple.TextEdit",
+            ]
+        case .folder:
+            bundles = [
+                "com.apple.finder",
+                "com.todesktop.230313mzl4w4u92",     // Cursor
+                "com.microsoft.VSCode",
+                "com.googlecode.iterm2",
+                "com.apple.Terminal",
+                "co.zeit.hyper",
+            ]
+        case .file:
+            bundles = ["com.apple.finder"]
+        }
 
         var seen = Set<String>()
-        for bundleIdentifier in candidates {
-            guard !seen.contains(bundleIdentifier),
-                  let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-                continue
-            }
+        for bundleIdentifier in bundles where !seen.contains(bundleIdentifier) {
+            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { continue }
             seen.insert(bundleIdentifier)
             choices.append(QuickLinkBrowserChoice(
                 id: bundleIdentifier,
@@ -658,12 +754,98 @@ private struct QuickLinkBrowserChoice: Identifiable, Hashable {
         return choices
     }
 
-    private static func defaultBrowserTitle() -> String {
-        guard let url = URL(string: "https://example.com"),
-              let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
-            return "Default Browser"
+    /// Union of every kind's choices — used by the surface for save-time lookup
+    /// so a user-selected app can always be resolved by ID even if the link
+    /// kind changes mid-edit.
+    static func installedChoices() -> [QuickLinkBrowserChoice] {
+        var seen = Set<String>()
+        var combined: [QuickLinkBrowserChoice] = []
+        for kind: Kind in [.browser, .image, .textCode, .folder, .file] {
+            for choice in choices(for: kind) where !seen.contains(choice.id) {
+                seen.insert(choice.id)
+                combined.append(choice)
+            }
         }
-        return "\(displayName(for: appURL)) (Default)"
+        return combined
+    }
+
+    /// Detect the link kind from a URL template / path string.
+    static func kind(forURLTemplate raw: String) -> Kind {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return .browser }
+
+        // Strip BTT placeholders so things like `/Users/me/{argument}.png`
+        // still classify by their suffix.
+        let bare = s.replacingOccurrences(of: #"\{[^}]+\}"#, with: "",
+                                          options: .regularExpression)
+
+        // Web-ish URL → browsers.
+        if let scheme = URLComponents(string: s)?.scheme?.lowercased() {
+            if scheme == "http" || scheme == "https" { return .browser }
+            if scheme == "file" {
+                let path = URL(string: s)?.path ?? ""
+                return classifyPath(path)
+            }
+            // Other schemes (mailto:, ssh:, slack:, raycast:, …) → "default app".
+            return .file
+        }
+        // Bare domain → web.
+        let firstToken = bare.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? bare
+        if firstToken.range(of: #"^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$"#,
+                            options: .regularExpression) != nil {
+            return .browser
+        }
+        // Filesystem path.
+        if bare.hasPrefix("/") || bare.hasPrefix("~/") || bare.hasPrefix("./") {
+            return classifyPath(bare)
+        }
+        return .browser
+    }
+
+    private static func classifyPath(_ path: String) -> Kind {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasSuffix("/") { return .folder }
+        let ext = (trimmed as NSString).pathExtension.lowercased()
+        if ext.isEmpty {
+            // No extension: likely a directory.
+            return .folder
+        }
+        let imageExts: Set<String> = [
+            "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif",
+            "bmp", "svg", "ico", "raw", "cr2", "nef", "arw", "dng", "psd"
+        ]
+        let textExts: Set<String> = [
+            "txt", "md", "markdown", "rst",
+            "swift", "m", "mm", "h", "hpp", "c", "cc", "cpp",
+            "js", "jsx", "ts", "tsx", "json", "yaml", "yml", "toml",
+            "html", "htm", "css", "scss", "less",
+            "py", "rb", "go", "rs", "java", "kt", "php", "lua", "pl",
+            "sh", "bash", "zsh", "fish", "ps1",
+            "xml", "csv", "tsv", "sql",
+            "log", "ini", "conf", "env"
+        ]
+        if imageExts.contains(ext)  { return .image }
+        if textExts.contains(ext)   { return .textCode }
+        return .file
+    }
+
+    private static func defaultTitle(for kind: Kind) -> String {
+        let probeURL: URL?
+        switch kind {
+        case .browser: probeURL = URL(string: "https://example.com")
+        case .image:   probeURL = URL(string: "file:///System/Library/Desktop%20Pictures/Solid%20Colors/Black.png")
+        case .folder:
+            // Folders open in Finder by default; probing a directory URL
+            // (not a text file) avoids picking up TextEdit by mistake.
+            probeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        case .textCode, .file:
+            probeURL = URL(string: "file:///etc/hosts")
+        }
+        if let url = probeURL, let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+            return "\(displayName(for: appURL)) (Default)"
+        }
+        return "Default"
     }
 
     private static func displayName(for appURL: URL) -> String {
@@ -773,13 +955,25 @@ private struct QuickLinkEditorView: View {
                     }
 
                     formRow("Open With") {
+                        // Apps shown here are filtered by what the link looks
+                        // like (web URL, image, text/code, folder, generic file).
+                        let kindChoices = QuickLinkBrowserChoice.choices(
+                            for: QuickLinkBrowserChoice.kind(forURLTemplate: draft.urlTemplate)
+                        )
                         Picker("", selection: $draft.browserChoiceID) {
-                            ForEach(browserChoices) { browser in
+                            ForEach(kindChoices) { browser in
                                 Text(browser.title).tag(browser.id)
                             }
                         }
                         .labelsHidden()
                         .frame(maxWidth: .infinity)
+                        .onChange(of: draft.urlTemplate) { _ in
+                            // If the previously selected app isn't applicable
+                            // to the new link kind, fall back to "default".
+                            if !kindChoices.contains(where: { $0.id == draft.browserChoiceID }) {
+                                draft.browserChoiceID = "default"
+                            }
+                        }
                     }
 
                     formRow("Icon") {
