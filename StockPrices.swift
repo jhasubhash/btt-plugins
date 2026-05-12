@@ -31,24 +31,75 @@ struct StockQuote {
 class StockPricesPlugin: NSObject, BTTLauncherPluginInterface {
     weak var delegate: (any BTTLauncherPluginDelegate)?
 
+    /// Shared across the launcher result list and the surface views, so
+    /// both see the same tracked symbols and cached quotes.
+    private let store = StockWatchlistStore()
+    private var didKickOffInitialRefresh = false
+
     static func launcherPluginName() -> String { "Stocks" }
     static func launcherPluginDescription() -> String {
         "Track stock prices and view detailed charts."
     }
     static func launcherPluginIcon() -> String { "chart.line.uptrend.xyaxis" }
 
-    /// One root entry: "Stocks". Activating it pushes the watchlist surface,
-    /// which then handles add / delete / detail navigation in-place.
+    /// Always shows a root "Stocks" entry that opens the watchlist surface.
+    /// When the user types a symbol prefix (e.g. "AA"), tracked symbols
+    /// matching that prefix are surfaced as direct results so the user can
+    /// jump straight into a stock's detail view from the main launcher.
     func launcherResults(for context: BTTLauncherPluginContext) -> [BTTLauncherPluginResult]? {
-        let r = BTTLauncherPluginResult()
-        r.itemIdentifier = "stocks-root"
-        r.title = "Stocks"
-        r.subtitle = "Track stock prices and view detailed charts"
-        r.systemImageName = "chart.line.uptrend.xyaxis"
-        r.surfaceIdentifier = "stocks-root"
-        r.trailingHint = "↩"
-        r.keywords = ["stocks", "stock", "ticker", "watchlist", "prices"]
-        return [r]
+        // Lazily refresh quotes the first time the plugin is queried so that
+        // direct launcher results have prices to show.
+        if !didKickOffInitialRefresh {
+            didKickOffInitialRefresh = true
+            DispatchQueue.main.async { [weak self] in
+                self?.store.refreshAll()
+            }
+        }
+
+        var results: [BTTLauncherPluginResult] = []
+
+        // Root entry — always present.
+        let root = BTTLauncherPluginResult()
+        root.itemIdentifier = "stocks-root"
+        root.title = "Stocks"
+        root.subtitle = "Track stock prices and view detailed charts"
+        root.systemImageName = "chart.line.uptrend.xyaxis"
+        root.surfaceIdentifier = "stocks-root"
+        root.trailingHint = "↩"
+        root.keywords = ["stocks", "stock", "ticker", "watchlist", "prices"]
+        results.append(root)
+
+        // Per-symbol direct entries when the user is typing.
+        let query = (context.query ?? "")
+            .uppercased()
+            .trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty {
+            let snapshot = store.threadSafeSnapshot()
+            for sym in snapshot.symbols where sym.hasPrefix(query) {
+                let r = BTTLauncherPluginResult()
+                r.itemIdentifier = "stocks-detail-\(sym)"
+                r.surfaceIdentifier = "stocks-detail-\(sym)"
+                r.keywords = [sym]
+
+                if let q = snapshot.quotes[sym] {
+                    r.title = "\(sym)   \(q.priceString)"
+                    r.subtitle = "\(q.name)  ·  \(q.changeString)"
+                    r.systemImageName = q.isPositive
+                        ? "arrow.up.right.circle.fill"
+                        : "arrow.down.left.circle.fill"
+                    r.trailingHint = q.isPositive ? "▲" : "▼"
+                } else {
+                    r.title = sym
+                    r.subtitle = "Loading…"
+                    r.systemImageName = "chart.bar.fill"
+                    r.trailingHint = ""
+                }
+
+                results.append(r)
+            }
+        }
+
+        return results
     }
 
     func launcherSurface(
@@ -56,7 +107,14 @@ class StockPricesPlugin: NSObject, BTTLauncherPluginInterface {
         surfaceIdentifier: String?,
         context: BTTLauncherPluginContext
     ) -> (any BTTLauncherPluginSurfaceInterface)? {
-        return StocksRootSurface()
+        let detailPrefix = "stocks-detail-"
+        let initialSymbol: String?
+        if itemIdentifier.hasPrefix(detailPrefix) {
+            initialSymbol = String(itemIdentifier.dropFirst(detailPrefix.count))
+        } else {
+            initialSymbol = nil
+        }
+        return StocksRootSurface(store: store, initialDetailSymbol: initialSymbol)
     }
 }
 
@@ -235,8 +293,20 @@ private final class ResizableHostingView<Root: View>: NSHostingView<Root> {
 
 final class StocksRootSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
-    private let store = StockWatchlistStore()
-    private let nav = StocksNavigation()
+    private let store: StockWatchlistStore
+    private let nav: StocksNavigation
+
+    init(store: StockWatchlistStore, initialDetailSymbol: String? = nil) {
+        self.store = store
+        self.nav = StocksNavigation()
+        super.init()
+        if let sym = initialDetailSymbol, store.symbols.contains(sym) {
+            nav.detailSymbol = sym
+            if let idx = store.symbols.firstIndex(of: sym) {
+                nav.selectedIndex = idx
+            }
+        }
+    }
 
     func makeLauncherSurfaceView() -> NSView {
         let view = ResizableHostingView(
@@ -879,13 +949,37 @@ final class StockWatchlistStore: ObservableObject {
     @Published private(set) var lastFetch: Date? = nil
     @Published private(set) var loadingSymbols: Set<String> = []
 
+    /// Lock-protected mirror of `symbols`/`quotes` so background callers
+    /// (e.g. `launcherResults` invoked off the main queue) can read a
+    /// consistent snapshot without touching `@Published` storage.
+    private var snapshotSymbols: [String]
+    private var snapshotQuotes: [String: StockQuote] = [:]
+    private let snapshotLock = NSLock()
+
     init() {
+        let initial: [String]
         if let saved = UserDefaults.standard.stringArray(forKey: watchlistDefaultsKey),
            !saved.isEmpty {
-            self.symbols = saved.map { $0.uppercased() }
+            initial = saved.map { $0.uppercased() }
         } else {
-            self.symbols = defaultWatchlist
+            initial = defaultWatchlist
         }
+        self.symbols = initial
+        self.snapshotSymbols = initial
+    }
+
+    /// Thread-safe read of the current symbols + quotes. Safe to call from
+    /// any queue (including BTT's launcher-results background thread).
+    func threadSafeSnapshot() -> (symbols: [String], quotes: [String: StockQuote]) {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return (snapshotSymbols, snapshotQuotes)
+    }
+
+    private func writeSnapshot(_ block: () -> Void) {
+        snapshotLock.lock()
+        block()
+        snapshotLock.unlock()
     }
 
     // MARK: Mutations
@@ -897,6 +991,7 @@ final class StockWatchlistStore: ObservableObject {
         let sym = raw.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sym.isEmpty, !symbols.contains(sym) else { return false }
         symbols.append(sym)
+        writeSnapshot { snapshotSymbols.append(sym) }
         persist()
         fetchOne(sym)
         return true
@@ -905,6 +1000,10 @@ final class StockWatchlistStore: ObservableObject {
     func remove(_ symbol: String) {
         symbols.removeAll { $0 == symbol }
         quotes.removeValue(forKey: symbol)
+        writeSnapshot {
+            snapshotSymbols.removeAll { $0 == symbol }
+            snapshotQuotes.removeValue(forKey: symbol)
+        }
         persist()
     }
 
@@ -928,7 +1027,10 @@ final class StockWatchlistStore: ObservableObject {
             fetchStockQuote(symbol: sym) { [weak self] q in
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    if let q = q { self.quotes[sym] = q }
+                    if let q = q {
+                        self.quotes[sym] = q
+                        self.writeSnapshot { self.snapshotQuotes[sym] = q }
+                    }
                     pending -= 1
                     if pending == 0 {
                         self.lastFetch = Date()
@@ -946,7 +1048,10 @@ final class StockWatchlistStore: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.loadingSymbols.remove(symbol)
-                if let q = q { self.quotes[symbol] = q }
+                if let q = q {
+                    self.quotes[symbol] = q
+                    self.writeSnapshot { self.snapshotQuotes[symbol] = q }
+                }
             }
         }
     }
