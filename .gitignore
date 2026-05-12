@@ -1,0 +1,13 @@
+# Ignore everything
+*
+
+# But allow directories
+!*/
+
+# Track only Swift files
+!*.swift
+
+# Track the README and its screenshots
+!README.md
+!.gitignore
+!docs/screenshots/*.png
