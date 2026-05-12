@@ -16,6 +16,7 @@ BTT recompiles the corresponding `.btt*plugin` bundle on disk automatically.
 | [Jira Issues](#jira-issues) | Launcher | Browse issues assigned to / reported by / watched by you, or run any JQL |
 | [GitHub PR Monitor](#github-pr-monitor) | Launcher | Lists open PRs and review requests for a fixed GitHub repo |
 | [Stock Prices](#stock-prices) | Launcher | Quote lookup with sparkline + change/period stats |
+| [Kill Process](#kill-process) | Launcher | Browse running processes and kill / graceful-quit them |
 | [Cursor Launcher](#cursor-launcher) | Launcher | Quick-open recent Cursor workspaces |
 | [VS Code Launcher](#vs-code-launcher) | Launcher | Quick-open recent VS Code workspaces |
 | [Copy Path / URL](#copy-path--url) | Action | Copies the front app's document path or the active browser tab's URL |
@@ -76,6 +77,23 @@ Look up any ticker and see a sparkline plus key stats.
 ![Stock detail view](docs/screenshots/stock-prices.png)
 
 Source: [StockPrices.swift](StockPrices.swift)
+
+---
+
+### Kill Process
+
+A lightweight Activity Monitor inside the launcher.
+
+- Lists running processes (via `ps ax`), sorted by CPU descending
+- Type in the launcher search box to filter by process name
+- Each row shows PID, CPU %, Mem %, and the owning user
+- ↑/↓ to navigate, **Return** to force-kill (`SIGKILL`), `⌘T` for a graceful quit (`SIGTERM`)
+- Click any row to select it
+- Surface size is remembered across invocations
+
+![Kill Process](docs/screenshots/kill-process.png)
+
+Source: [KillProcess.swift](KillProcess.swift)
 
 ---
 
