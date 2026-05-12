@@ -255,17 +255,49 @@ final class StocksRootSurface: NSObject, BTTLauncherPluginSurfaceInterface {
         nav.detailSymbol == nil ? "Press Esc to close" : "Press Esc to go back"
     }
 
-    /// Intercept Esc when we're in the detail view so it pops back to the
-    /// watchlist instead of closing the whole surface. In the list view we
-    /// return `nil` so BTT applies its default behaviour (closes back to
-    /// the launcher main menu).
+    /// Handle launcher keyboard commands:
+    /// - List view: ↑/↓ moves selection, Return opens detail, Esc → BTT default
+    ///   (closes back to launcher main menu).
+    /// - Detail view: Esc pops back to the watchlist.
     func handleLauncherInputCommand(
         _ command: BTTLauncherPluginInputCommand
     ) -> BTTLauncherPluginSurfaceCommandResult? {
-        guard command == .goBackOrClose, nav.detailSymbol != nil else {
+        // Detail-view Esc → pop to list.
+        if command == .goBackOrClose, nav.detailSymbol != nil {
+            nav.detailSymbol = nil
+            return Self.handled()
+        }
+
+        // List-view keyboard navigation.
+        guard nav.detailSymbol == nil else { return nil }
+
+        switch command {
+        case .moveUp:
+            let count = store.symbols.count
+            guard count > 0 else { return Self.handled() }
+            nav.selectedIndex = (nav.selectedIndex - 1 + count) % count
+            return Self.handled()
+        case .moveDown:
+            let count = store.symbols.count
+            guard count > 0 else { return Self.handled() }
+            nav.selectedIndex = (nav.selectedIndex + 1) % count
+            return Self.handled()
+        case .activateSelection:
+            let count = store.symbols.count
+            guard nav.selectedIndex >= 0, nav.selectedIndex < count else {
+                return Self.handled()
+            }
+            let sym = store.symbols[nav.selectedIndex]
+            if store.quotes[sym] != nil {
+                nav.detailSymbol = sym
+            }
+            return Self.handled()
+        default:
             return nil
         }
-        nav.detailSymbol = nil
+    }
+
+    private static func handled() -> BTTLauncherPluginSurfaceCommandResult {
         let result = BTTLauncherPluginSurfaceCommandResult()
         result.handled = true
         result.goBack = false
@@ -274,11 +306,12 @@ final class StocksRootSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     }
 }
 
-/// Tracks which symbol's detail view is currently shown (nil = list view).
-/// Lifted out of the SwiftUI view so the hosting surface can pop the detail
-/// from outside (e.g. Esc handler).
+/// Shared navigation/selection state across the surface and SwiftUI views.
+/// Lifted out of the SwiftUI hierarchy so the hosting surface can mutate it
+/// from outside (Esc handler, ↑/↓/Return key handlers).
 final class StocksNavigation: ObservableObject {
     @Published var detailSymbol: String? = nil
+    @Published var selectedIndex: Int = 0
 }
 
 // MARK: - Sparkline Chart
@@ -1014,27 +1047,47 @@ struct StocksRootView: View {
             Divider()
 
             // Watchlist
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.symbols, id: \.self) { sym in
-                        StockRowView(
-                            symbol: sym,
-                            quote: store.quotes[sym],
-                            isLoading: store.loadingSymbols.contains(sym)
-                                || (store.quotes[sym] == nil && store.isLoading),
-                            onSelect: {
-                                if store.quotes[sym] != nil { nav.detailSymbol = sym }
-                            },
-                            onDelete: { store.remove(sym) }
-                        )
-                        Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(store.symbols.enumerated()), id: \.element) { idx, sym in
+                            StockRowView(
+                                symbol: sym,
+                                quote: store.quotes[sym],
+                                isLoading: store.loadingSymbols.contains(sym)
+                                    || (store.quotes[sym] == nil && store.isLoading),
+                                isSelected: idx == nav.selectedIndex,
+                                onSelect: {
+                                    nav.selectedIndex = idx
+                                    if store.quotes[sym] != nil { nav.detailSymbol = sym }
+                                },
+                                onDelete: { store.remove(sym) }
+                            )
+                            .id(sym)
+                            Divider()
+                        }
+                        if store.symbols.isEmpty {
+                            Text("No stocks tracked yet. Click + to add one.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(40)
+                        }
                     }
-                    if store.symbols.isEmpty {
-                        Text("No stocks tracked yet. Click + to add one.")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(40)
+                }
+                // Keep keyboard-selected row visible.
+                .onChange(of: nav.selectedIndex) { newIdx in
+                    guard newIdx >= 0, newIdx < store.symbols.count else { return }
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        proxy.scrollTo(store.symbols[newIdx], anchor: .center)
+                    }
+                }
+                // Clamp selection if list shrinks (e.g. after delete).
+                .onChange(of: store.symbols.count) { newCount in
+                    if newCount == 0 {
+                        nav.selectedIndex = 0
+                    } else if nav.selectedIndex >= newCount {
+                        nav.selectedIndex = newCount - 1
                     }
                 }
             }
@@ -1071,6 +1124,7 @@ struct StockRowView: View {
     let symbol: String
     let quote: StockQuote?
     let isLoading: Bool
+    let isSelected: Bool
     let onSelect: () -> Void
     let onDelete: () -> Void
 
@@ -1079,6 +1133,12 @@ struct StockRowView: View {
     private var accent: Color {
         guard let q = quote else { return .secondary }
         return q.isPositive ? .green : Color(red: 1.0, green: 0.3, blue: 0.3)
+    }
+
+    private var rowBackground: Color {
+        if isSelected { return Color.accentColor.opacity(0.18) }
+        if isHovered  { return Color.primary.opacity(0.06) }
+        return .clear
     }
 
     var body: some View {
@@ -1117,14 +1177,14 @@ struct StockRowView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
-                    .opacity(isHovered ? 1 : 0)
+                    .opacity(isHovered || isSelected ? 1 : 0)
             }
             .buttonStyle(.plain)
             .help("Remove from watchlist")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        .background(rowBackground)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture { onSelect() }
