@@ -735,7 +735,7 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     }
 
     func launcherSurfacePreferredContentSize() -> CGSize { GitHubPRSurfaceSize.load() }
-    func launcherSurfaceKeepsLauncherPinned()  -> Bool   { true }
+    func launcherSurfaceKeepsLauncherPinned()  -> Bool   { false }
     func launcherSurfacePlaceholderText()      -> String? { "Filter PRs…" }
     func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  Esc Back" }
 

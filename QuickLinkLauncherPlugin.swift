@@ -645,7 +645,7 @@ private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceIn
     }
 
     func launcherSurfaceKeepsLauncherPinned() -> Bool {
-        true
+        false
     }
 
     func launcherSurfacePlaceholderText() -> String? {

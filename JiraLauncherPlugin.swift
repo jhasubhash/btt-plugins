@@ -693,7 +693,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     }
 
     func launcherSurfacePreferredContentSize() -> CGSize { JiraSurfaceSize.load() }
-    func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
+    func launcherSurfaceKeepsLauncherPinned() -> Bool { false }
     func launcherSurfacePlaceholderText() -> String? { "Jira" }
     func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  Cmd+R Refresh  |  Cmd+, Settings" }
 
@@ -1401,7 +1401,7 @@ final class JiraConfigSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     }
 
     func launcherSurfacePreferredContentSize() -> CGSize { CGSize(width: 560, height: 360) }
-    func launcherSurfaceKeepsLauncherPinned()  -> Bool   { true }
+    func launcherSurfaceKeepsLauncherPinned()  -> Bool   { false }
     func launcherSurfacePlaceholderText()      -> String? { "Jira Configuration" }
     func launcherSurfaceFooterHint()           -> String? { "Return Save  ·  Esc Cancel" }
 

@@ -391,7 +391,7 @@ final class ProcessListSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfacePlaceholderText() -> String? { "Filter by name, PID, or user\u{2026}" }
     func launcherSurfaceFooterHint() -> String? { "\u{21A9} Force kill  \u{00B7}  \u{2318}T Graceful quit  \u{00B7}  \u{2191}\u{2193} Navigate" }
     func launcherSurfacePreferredContentSize() -> CGSize { KillProcessSurfaceSize.load() }
-    func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
+    func launcherSurfaceKeepsLauncherPinned() -> Bool { false }
 
     // Match the working Jira/GitHub pattern: BTT keeps handling navigation
     // keys (↑/↓/Return) so it can route them through handleLauncherInputCommand;

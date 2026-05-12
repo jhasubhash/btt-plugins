@@ -320,7 +320,7 @@ final class StocksRootSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfaceMinimumContentSize() -> CGSize {
         CGSize(width: StockSurfaceSize.minWidth, height: StockSurfaceSize.minHeight)
     }
-    func launcherSurfaceKeepsLauncherPinned() -> Bool { true }
+    func launcherSurfaceKeepsLauncherPinned() -> Bool { false }
     func launcherSurfaceFooterHint() -> String? {
         nav.detailSymbol == nil ? "Press Esc to close" : "Press Esc to go back"
     }
