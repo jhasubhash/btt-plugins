@@ -537,6 +537,64 @@ private struct QuickLinkConfiguration {
     }
 }
 
+private enum QuickLinkEditorSurfaceSize {
+    static let widthKey  = "com.folivora.launcher.quicklinks.editorWidth"
+    static let heightKey = "com.folivora.launcher.quicklinks.editorHeight"
+
+    static let defaultSize = CGSize(width: 760, height: 560)
+    static let minWidth:  CGFloat = 620
+    static let minHeight: CGFloat = 420
+    static let maxWidth:  CGFloat = 2000
+    static let maxHeight: CGFloat = 1600
+
+    static func load() -> CGSize {
+        let w = UserDefaults.standard.object(forKey: widthKey)  as? CGFloat
+        let h = UserDefaults.standard.object(forKey: heightKey) as? CGFloat
+        guard let w, let h else { return defaultSize }
+        return CGSize(
+            width:  min(maxWidth,  max(minWidth,  w)),
+            height: min(maxHeight, max(minHeight, h))
+        )
+    }
+
+    static func save(_ size: CGSize) {
+        guard size.width >= minWidth, size.height >= minHeight else { return }
+        UserDefaults.standard.set(size.width,  forKey: widthKey)
+        UserDefaults.standard.set(size.height, forKey: heightKey)
+    }
+}
+
+/// `NSHostingView` subclass that reports host-window size changes so the
+/// surface can persist the user's resized dimensions.
+private final class QuickLinkResizableHostingView<Root: View>: NSHostingView<Root> {
+    var onSizeChanged: ((CGSize) -> Void)?
+    private var resizeObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            removeResizeObserver()
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                guard let self, let window else { return }
+                self.onSizeChanged?(window.contentLayoutRect.size)
+            }
+        } else {
+            removeResizeObserver()
+        }
+    }
+
+    private func removeResizeObserver() {
+        if let token = resizeObserver { NotificationCenter.default.removeObserver(token) }
+        resizeObserver = nil
+    }
+
+    deinit { removeResizeObserver() }
+}
+
 private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
 
@@ -559,7 +617,7 @@ private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceIn
             configuration: existingInstance.map(QuickLinkConfiguration.init(instance:))
                 ?? QuickLinkConfiguration(urlTemplate: initialURLTemplate())
         )
-        return NSHostingView(rootView: QuickLinkEditorView(
+        let host = QuickLinkResizableHostingView(rootView: QuickLinkEditorView(
             isEditing: existingInstance != nil,
             initialDraft: draft,
             browserChoices: browserChoices,
@@ -573,14 +631,17 @@ private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceIn
                 self?.delegate?.requestLauncherSurfaceGoBack()
             }
         ))
+        host.onSizeChanged = { size in QuickLinkEditorSurfaceSize.save(size) }
+        return host
     }
 
     func launcherSurfacePreferredContentSize() -> CGSize {
-        CGSize(width: 760, height: 560)
+        QuickLinkEditorSurfaceSize.load()
     }
 
     func launcherSurfaceMinimumContentSize() -> CGSize {
-        CGSize(width: 620, height: 420)
+        CGSize(width: QuickLinkEditorSurfaceSize.minWidth,
+               height: QuickLinkEditorSurfaceSize.minHeight)
     }
 
     func launcherSurfaceKeepsLauncherPinned() -> Bool {

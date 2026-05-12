@@ -15,6 +15,7 @@ BTT recompiles the corresponding `.btt*plugin` bundle on disk automatically.
 | --- | --- | --- |
 | [Jira Issues](#jira-issues) | Launcher | Browse issues assigned to / reported by / watched by you, or run any JQL |
 | [GitHub PR Monitor](#github-pr-monitor) | Launcher | Lists open PRs and review requests for a fixed GitHub repo |
+| [Quick Links](#quick-links) | Launcher | Save reusable URL / path templates and open them with the right app |
 | [Stock Prices](#stock-prices) | Launcher | Quote lookup with sparkline + change/period stats |
 | [Kill Process](#kill-process) | Launcher | Browse running processes and kill / graceful-quit them |
 | [Cursor Launcher](#cursor-launcher) | Launcher | Quick-open recent Cursor workspaces |
@@ -61,6 +62,32 @@ in the toolbar, or ⌘,). The value is stored in `UserDefaults` under
 ![GitHub PR list](docs/screenshots/github-prs.png)
 
 Source: [GitHubPRMonitor.swift](GitHubPRMonitor.swift)
+
+---
+
+### Quick Links
+
+Save reusable URL or filesystem-path templates as launcher items, each with
+its own icon, keywords, and "Open With" target.
+
+- **Create Quick Link** entry in the launcher opens the editor surface
+- The Link field auto-fills from the clipboard when it contains a URL
+  (any scheme), a bare domain (promoted to `https://`), or an absolute /
+  `~`-relative path — random text is ignored
+- The **Open With** picker is context-aware and only shows apps relevant to
+  the link kind:
+  - web URL / domain → system default browser, Safari, Chrome, Arc, Dia, Firefox, Brave, Edge
+  - image file → Preview (default), Photoshop, Pixelmator, Sketch, Figma, Photos
+  - text / code → Cursor, VS Code, Sublime, Xcode, Nova, BBEdit, TextEdit
+  - folder → Finder (default), Cursor, VS Code, iTerm, Terminal, Hyper
+  - other / custom scheme → system default app
+- Templates support `{argument}`, `{clipboard}`, `{finderPath}`, `{finderURL}`, and any BTT variable; `{rawArgument}` skips URL encoding
+- Filesystem paths (`/...`, `~/...`, `./...`) are opened via `URL(fileURLWithPath:)` so they hand off to the right app instead of being mangled into a web URL
+- Editor surface size is remembered across invocations
+
+![Quick Links editor](docs/screenshots/quick-links.png)
+
+Source: [QuickLinkLauncherPlugin.swift](QuickLinkLauncherPlugin.swift)
 
 ---
 
