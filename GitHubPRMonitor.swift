@@ -1,6 +1,8 @@
 // BTT-Plugin-Name: GitHub PR Monitor
-// BTT-Plugin-Type: FloatingMenuWidget
+// BTT-Plugin-Identifier: com.bttuserplugin.github.prmonitor
+// BTT-Plugin-Type: Launcher
 // BTT-Plugin-Icon: arrow.triangle.pull
+// BTT-Plugin-Description: Browse your open GitHub PRs and review requests
 // BTT-AI-Managed: true
 
 import Cocoa
@@ -27,6 +29,12 @@ class PRViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var lastRefreshed: Date?
+    @Published var searchQuery:  String  = "" { didSet { selectedPRId = nil } }
+    @Published var selectedPRId: Int?    = nil
+
+    var filteredMyPRs:     [GitHubPR] { filterPRs(myPRs)     }
+    var filteredReviewPRs: [GitHubPR] { filterPRs(reviewPRs) }
+    private var allFiltered: [GitHubPR] { filteredMyPRs + filteredReviewPRs }
 
     static let repo = "Adobe-CreativeCloud/photoshop"
 
@@ -134,6 +142,42 @@ class PRViewModel: ObservableObject {
         }
     }
 
+    private func filterPRs(_ prs: [GitHubPR]) -> [GitHubPR] {
+        let q = searchQuery.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return prs }
+        return prs.filter {
+            $0.title.lowercased().contains(q)  ||
+            String($0.number).contains(q)      ||
+            $0.author.lowercased().contains(q)
+        }
+    }
+
+    func navigateDown() {
+        let list = allFiltered
+        guard !list.isEmpty else { return }
+        if let id = selectedPRId, let idx = list.firstIndex(where: { $0.id == id }) {
+            selectedPRId = list[min(list.count - 1, idx + 1)].id
+        } else {
+            selectedPRId = list.first?.id
+        }
+    }
+
+    func navigateUp() {
+        let list = allFiltered
+        guard !list.isEmpty else { return }
+        if let id = selectedPRId, let idx = list.firstIndex(where: { $0.id == id }) {
+            selectedPRId = list[max(0, idx - 1)].id
+        } else {
+            selectedPRId = list.last?.id
+        }
+    }
+
+    func openSelected() {
+        if let id = selectedPRId, let pr = allFiltered.first(where: { $0.id == id }) {
+            open(pr)
+        }
+    }
+
     func open(_ pr: GitHubPR) {
         guard let url = URL(string: pr.url) else { return }
         NSWorkspace.shared.open(url)
@@ -144,6 +188,7 @@ class PRViewModel: ObservableObject {
 
 struct PRRowView: View {
     let pr: GitHubPR
+    var isSelected: Bool = false
     let onOpen: () -> Void
     @State private var hovered = false
 
@@ -180,11 +225,11 @@ struct PRRowView: View {
 
                 Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 11))
-                    .foregroundColor(hovered ? .accentColor : Color.secondary.opacity(0.35))
+                    .foregroundColor((isSelected || hovered) ? .accentColor : Color.secondary.opacity(0.35))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(hovered ? Color.accentColor.opacity(0.12) : Color.clear)
+            .background(isSelected ? Color.accentColor.opacity(0.22) : (hovered ? Color.accentColor.opacity(0.12) : Color.clear))
             .cornerRadius(6)
             .contentShape(Rectangle())
         }
@@ -245,6 +290,7 @@ struct PRSectionHeader: View {
 
 struct PRDashboard: View {
     @StateObject private var vm = PRViewModel()
+    let navProxy: NavigationProxy
 
     var body: some View {
         VStack(spacing: 0) {
@@ -304,49 +350,72 @@ struct PRDashboard: View {
             }
 
             // ── PR Lists ─────────────────────────────────────────
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 0) {
 
-                    // My Open PRs
-                    PRSectionHeader(title: "My Open PRs",
-                                    icon: "person.fill",
-                                    count: vm.myPRs.count,
-                                    color: .blue)
-                    if vm.myPRs.isEmpty {
-                        Text(vm.isLoading ? "Loading…" : "No open PRs 🎉")
-                            .font(.system(size: 12)).foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    } else {
-                        ForEach(vm.myPRs) { pr in
-                            PRRowView(pr: pr) { vm.open(pr) }
+                        // My Open PRs
+                        PRSectionHeader(title: "My Open PRs",
+                                        icon: "person.fill",
+                                        count: vm.filteredMyPRs.count,
+                                        color: .blue)
+                        if vm.filteredMyPRs.isEmpty {
+                            Text(vm.isLoading ? "Loading…" : (vm.searchQuery.isEmpty ? "No open PRs 🎉" : "No results"))
+                                .font(.system(size: 12)).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                        } else {
+                            ForEach(vm.filteredMyPRs) { pr in
+                                PRRowView(pr: pr, isSelected: vm.selectedPRId == pr.id) {
+                                    vm.selectedPRId = pr.id
+                                    vm.open(pr)
+                                }
+                                .id(pr.number)
+                            }
+                        }
+
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(height: 1)
+                            .padding(.vertical, 4)
+
+                        // Review Requested
+                        PRSectionHeader(title: "Review Requested",
+                                        icon: "eye.fill",
+                                        count: vm.filteredReviewPRs.count,
+                                        color: .orange)
+                        if vm.filteredReviewPRs.isEmpty {
+                            Text(vm.isLoading ? "Loading…" : (vm.searchQuery.isEmpty ? "No review requests 🎉" : "No results"))
+                                .font(.system(size: 12)).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                        } else {
+                            ForEach(vm.filteredReviewPRs) { pr in
+                                PRRowView(pr: pr, isSelected: vm.selectedPRId == pr.id) {
+                                    vm.selectedPRId = pr.id
+                                    vm.open(pr)
+                                }
+                                .id(pr.number)
+                            }
+                        }
+
+                        Spacer(minLength: 8)
+                    }
+                }
+                .onChange(of: vm.selectedPRId) { _, newID in
+                    if let id = newID {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            proxy.scrollTo(id, anchor: .center)
                         }
                     }
-
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(height: 1)
-                        .padding(.vertical, 4)
-
-                    // Review Requested
-                    PRSectionHeader(title: "Review Requested",
-                                    icon: "eye.fill",
-                                    count: vm.reviewPRs.count,
-                                    color: .orange)
-                    if vm.reviewPRs.isEmpty {
-                        Text(vm.isLoading ? "Loading…" : "No review requests 🎉")
-                            .font(.system(size: 12)).foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    } else {
-                        ForEach(vm.reviewPRs) { pr in
-                            PRRowView(pr: pr) { vm.open(pr) }
-                        }
-                    }
-
-                    Spacer(minLength: 8)
                 }
             }
         }
         .frame(minWidth: 460, idealWidth: 500, minHeight: 280, idealHeight: 420)
+        .onAppear {
+            navProxy.navigateUp   = { MainActor.assumeIsolated { vm.navigateUp()   } }
+            navProxy.navigateDown = { MainActor.assumeIsolated { vm.navigateDown() } }
+            navProxy.openSelected = { MainActor.assumeIsolated { vm.openSelected() } }
+            navProxy.viewModelReady?(vm)
+        }
     }
 
     func timeStr(_ d: Date) -> String {
@@ -356,22 +425,128 @@ struct PRDashboard: View {
     }
 }
 
-// MARK: - Widget Class
+// MARK: - Navigation Bridge
 
-class GitHubPRWidget: NSObject, BTTFloatingMenuWidgetInterface {
-    weak var delegate: (any BTTFloatingMenuWidgetDelegate)?
+final class NavigationProxy {
+    var navigateUp:    (() -> Void)?
+    var navigateDown:  (() -> Void)?
+    var openSelected:  (() -> Void)?
+    var viewModelReady: ((PRViewModel) -> Void)?
+}
 
-    static func widgetName() -> String        { "GitHub PR Monitor" }
-    static func widgetDescription() -> String { "Lists your open PRs and review requests in Adobe-CreativeCloud/photoshop" }
-    static func widgetIcon() -> String        { "arrow.triangle.pull" }
-    static func widgetWantsInteractiveView() -> Bool { true }
+// MARK: - Focus-aware Hosting View
 
-    static func widgetMinWidth() -> CGFloat   { 460 }
-    static func widgetMinHeight() -> CGFloat  { 280 }
-    static func widgetMaxWidth() -> CGFloat   { 700 }
-    static func widgetMaxHeight() -> CGFloat  { 700 }
+private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
+    var onMoveUp:        (() -> Void)?
+    var onMoveDown:      (() -> Void)?
+    var onSelectCurrent: (() -> Void)?
+    private var eventMonitor: Any?
 
-    func makeWidgetView() -> NSView {
-        NSHostingView(rootView: PRDashboard())
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { installMonitor() } else { removeMonitor() }
+    }
+
+    private func installMonitor() {
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // Pass keys through when a text field is active
+            if let fr = self.window?.firstResponder, fr is NSTextView { return event }
+            switch event.keyCode {
+            case 125: self.onMoveDown?();        return nil   // ↓
+            case 126: self.onMoveUp?();          return nil   // ↑
+            case 36, 76: self.onSelectCurrent?(); return nil  // Return / numpad Enter
+            default: return event
+            }
+        }
+    }
+
+    private func removeMonitor() {
+        if let m = eventMonitor { NSEvent.removeMonitor(m) }
+        eventMonitor = nil
+    }
+
+    deinit { removeMonitor() }
+}
+
+// MARK: - Launcher Plugin
+
+class GitHubPRLauncherPlugin: NSObject, BTTLauncherPluginInterface {
+    weak var delegate: (any BTTLauncherPluginDelegate)?
+
+    required override init() { super.init() }
+
+    static func launcherPluginName()        -> String { "GitHub PRs" }
+    static func launcherPluginDescription() -> String { "Browse your open GitHub PRs and review requests" }
+    static func launcherPluginIcon()        -> String { "arrow.triangle.pull" }
+
+    // Sync result – the single root entry that opens the surface.
+    func launcherResults(for context: BTTLauncherPluginContext) -> [BTTLauncherPluginResult]? {
+        [makeRootResult()]
+    }
+
+    func loadLauncherResults(for context: BTTLauncherPluginContext,
+                             completion: @escaping ([BTTLauncherPluginResult]?) -> Void) {
+        completion([makeRootResult()])
+    }
+
+    func launcherSurface(forItemIdentifier itemIdentifier: String,
+                         surfaceIdentifier: String?,
+                         context: BTTLauncherPluginContext) -> (any BTTLauncherPluginSurfaceInterface)? {
+        guard surfaceIdentifier == "github-prs" else { return nil }
+        return GitHubPRSurface()
+    }
+
+    func launcherResultSelected(_ result: BTTLauncherPluginResult,
+                                context: BTTLauncherPluginContext) {
+        // No-op; surface handles its own actions.
+    }
+
+    private func makeRootResult() -> BTTLauncherPluginResult {
+        let r = BTTLauncherPluginResult()
+        r.itemIdentifier    = "github-prs-root"
+        r.title             = "GitHub PRs"
+        r.subtitle          = "Adobe-CreativeCloud / photoshop"
+        r.systemImageName   = "arrow.triangle.pull"
+        r.surfaceIdentifier = "github-prs"
+        r.trailingHint      = "Open"
+        return r
+    }
+}
+
+// MARK: - Surface
+
+final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
+    weak var delegate: (any BTTLauncherPluginSurfaceDelegate)?
+
+    private var vm: PRViewModel?
+
+    func makeLauncherSurfaceView() -> NSView {
+        let navProxy = NavigationProxy()
+        let view = PRDashboard(navProxy: navProxy)
+        let hosting = FocusableHostingView(rootView: view)
+        hosting.onMoveUp        = { navProxy.navigateUp?() }
+        hosting.onMoveDown      = { navProxy.navigateDown?() }
+        hosting.onSelectCurrent = { navProxy.openSelected?() }
+        // Stash the VM so we can forward the launcher's search query into it.
+        navProxy.viewModelReady = { [weak self] vm in self?.vm = vm }
+        return hosting
+    }
+
+    func launcherSurfacePreferredContentSize() -> CGSize { CGSize(width: 560, height: 460) }
+    func launcherSurfaceKeepsLauncherPinned()  -> Bool   { true }
+    func launcherSurfacePlaceholderText()      -> String? { "Filter PRs…" }
+    func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  Esc Back" }
+
+    func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool { true }
+
+    func launcherSurfaceQueryDidChange(_ query: String?) {
+        let q = query ?? ""
+        DispatchQueue.main.async { [weak self] in
+            self?.vm?.searchQuery = q
+        }
     }
 }
