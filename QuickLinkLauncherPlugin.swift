@@ -1008,6 +1008,14 @@ private struct QuickLinkEditorView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             TextField("https://google.com/search?q={argument}", text: $draft.urlTemplate)
                                 .textFieldStyle(.roundedBorder)
+                                .onChange(of: draft.urlTemplate) { newValue in
+                                    // Suggest a name when the user hasn't typed
+                                    // one yet — derived from host or filename.
+                                    if draft.name.trimmingCharacters(in: .whitespaces).isEmpty,
+                                       let suggested = QuickLinkEditorView.suggestedTitle(forURLTemplate: newValue) {
+                                        draft.name = suggested
+                                    }
+                                }
                             Text("Use {argument}, {clipboard}, {finderPath}, {finderURL}, or any BTT variable. Use raw variants like {rawArgument} when the value should not be URL-encoded.")
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
@@ -1114,5 +1122,47 @@ private struct QuickLinkEditorView: View {
         }
         validationMessage = nil
         onSave(draft)
+    }
+
+    /// Derive a sensible Quick Link name from a URL or filesystem path so the
+    /// user doesn't have to type one when the field is empty.
+    static func suggestedTitle(forURLTemplate template: String) -> String? {
+        let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Filesystem paths: use the last path component (or "Home" for ~).
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~/") || trimmed == "~" || trimmed.hasPrefix("./") {
+            let expanded = (trimmed as NSString).expandingTildeInPath
+            let last = (expanded as NSString).lastPathComponent
+            if last.isEmpty || last == "/" {
+                return "Home"
+            }
+            return last
+        }
+
+        // URL with scheme — pull the host.
+        if let url = URL(string: trimmed),
+           let host = url.host, !host.isEmpty {
+            return prettyHost(host)
+        }
+
+        // No scheme but looks like a domain (e.g. "example.com/foo").
+        let firstSegment = trimmed.split(separator: "/").first.map(String.init) ?? trimmed
+        if firstSegment.contains("."),
+           firstSegment.range(of: "^[A-Za-z0-9][A-Za-z0-9.-]*\\.[A-Za-z]{2,}$",
+                              options: .regularExpression) != nil {
+            return prettyHost(firstSegment)
+        }
+        return nil
+    }
+
+    /// "www.github.com" -> "Github", "jira.corp.adobe.com" -> "Jira".
+    private static func prettyHost(_ host: String) -> String {
+        var trimmed = host
+        if trimmed.hasPrefix("www.") {
+            trimmed.removeFirst(4)
+        }
+        let label = trimmed.split(separator: ".").first.map(String.init) ?? trimmed
+        return label.prefix(1).uppercased() + label.dropFirst()
     }
 }
