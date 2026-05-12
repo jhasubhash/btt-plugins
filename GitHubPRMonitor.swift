@@ -544,13 +544,15 @@ private final class FocusableHostingView<Root: View>: NSHostingView<Root> {
         guard eventMonitor == nil else { return }
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            // Pass keys through when a text field is active
-            if let fr = self.window?.firstResponder, fr is NSTextView { return event }
+            // Navigation keys are always intercepted first, even when the launcher's
+            // search field is the first responder — otherwise it would swallow them.
             switch event.keyCode {
             case 125: self.onMoveDown?();        return nil   // ↓
             case 126: self.onMoveUp?();          return nil   // ↑
             case 36, 76: self.onSelectCurrent?(); return nil  // Return / numpad Enter
             default:
+                // Let text fields / search fields keep their own non-nav key events
+                if let fr = self.window?.firstResponder, fr is NSTextView { return event }
                 if self.redirectTypedCharacterToLauncherSearch(event) {
                     return nil
                 }
@@ -737,12 +739,55 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfacePlaceholderText()      -> String? { "Filter PRs…" }
     func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  Esc Back" }
 
-    func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool { true }
+    func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool {
+        // Let BTT keep handling navigation keys (↑/↓/Return) so it can route
+        // them through handleLauncherInputCommand. Everything else — in
+        // particular printable characters going to the search field — bypasses.
+        guard event.type == .keyDown else { return true }
+        switch event.keyCode {
+        case 125, 126, 36, 76, 123, 124: return false   // ↓ ↑ Return Enter ← →
+        default: return true
+        }
+    }
 
     func launcherSurfaceQueryDidChange(_ query: String?) {
         let q = query ?? ""
         DispatchQueue.main.async { [weak vm] in
             vm?.searchQuery = q
         }
+    }
+
+    // BTT routes arrow keys through this hook regardless of which view holds
+    // focus — use it as the primary navigation path so the launcher's search
+    // field can't swallow ↑/↓.
+    func handleLauncherInputCommand(_ command: BTTLauncherPluginInputCommand) -> BTTLauncherPluginSurfaceCommandResult? {
+        let result = BTTLauncherPluginSurfaceCommandResult()
+        switch command {
+        case .moveUp:
+            DispatchQueue.main.async { [weak vm] in vm?.navigateUp() }
+            result.handled = true
+            return result
+        case .moveDown:
+            DispatchQueue.main.async { [weak vm] in vm?.navigateDown() }
+            result.handled = true
+            return result
+        default:
+            return nil
+        }
+    }
+
+    // BTT doesn't expose a `confirmSelection` input command, so handle Return /
+    // numpad Enter directly here. This fires regardless of whether the launcher's
+    // search field has focus.
+    func handleLauncherRawKeyEvent(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            DispatchQueue.main.async { [weak self] in
+                self?.vm.openSelected()
+                self?.delegate?.requestLauncherSurfaceClose()
+            }
+            return true
+        }
+        return false
     }
 }
