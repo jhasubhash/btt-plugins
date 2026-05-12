@@ -30,29 +30,61 @@ class PRViewModel: ObservableObject {
     @Published var lastRefreshed: Date?
     @Published var searchQuery:  String  = "" { didSet { selectedPRId = nil } }
     @Published var selectedPRId: Int?    = nil
+    @Published var repo: String
 
     var filteredMyPRs:     [GitHubPR] { filterPRs(myPRs)     }
     var filteredReviewPRs: [GitHubPR] { filterPRs(reviewPRs) }
     private var allFiltered: [GitHubPR] { filteredMyPRs + filteredReviewPRs }
 
-    static let repo = "Adobe-CreativeCloud/photoshop"
+    /// Default repo used the very first time the plugin runs. After that the
+    /// user's value is read from / written to `UserDefaults`.
+    static let defaultRepo = "OWNER/REPO"
+    static let repoUserDefaultsKey = "com.bttuserplugin.github.prmonitor.repo"
+
+    var isConfigured: Bool {
+        let trimmed = repo.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.contains("/") && trimmed != Self.defaultRepo
+    }
 
     init() {
+        self.repo = UserDefaults.standard.string(forKey: Self.repoUserDefaultsKey)
+            ?? Self.defaultRepo
+        Task { await refresh() }
+    }
+
+    func updateRepo(_ newValue: String) {
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != repo else { return }
+        repo = trimmed
+        UserDefaults.standard.set(trimmed, forKey: Self.repoUserDefaultsKey)
+        // Clear stale state and refetch for the new repo.
+        myPRs = []
+        reviewPRs = []
+        selectedPRId = nil
+        errorMessage = nil
         Task { await refresh() }
     }
 
     func refresh() async {
+        guard isConfigured else {
+            errorMessage = "Set a repo in Settings (e.g. owner/name)."
+            myPRs = []
+            reviewPRs = []
+            isLoading = false
+            return
+        }
         isLoading = true
         errorMessage = nil
 
+        let targetRepo = repo
         async let mine   = run(args: ["pr", "list",
-                                      "--repo", Self.repo,
+                                      "--repo", targetRepo,
                                       "--author", "@me",
                                       "--state", "open",
                                       "--json", "number,title,url,isDraft,author,updatedAt",
                                       "--limit", "50"])
         async let review = run(args: ["pr", "list",
-                                      "--repo", Self.repo,
+                                      "--repo", targetRepo,
                                       "--search", "review-requested:@me",
                                       "--state", "open",
                                       "--json", "number,title,url,isDraft,author,updatedAt",
@@ -295,6 +327,8 @@ struct PRSectionHeader: View {
 
 struct PRDashboard: View {
     @ObservedObject var vm: PRViewModel
+    @State private var showSettings = false
+    @State private var repoDraft: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -304,7 +338,7 @@ struct PRDashboard: View {
                 Image(systemName: "arrow.triangle.pull")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.accentColor)
-                Text("Adobe-CreativeCloud / photoshop")
+                Text(vm.repo)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
@@ -322,7 +356,22 @@ struct PRDashboard: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
-                    .help("Refresh")
+                    .keyboardShortcut("r", modifiers: [.command])
+                    .help("Refresh (⌘R)")
+                }
+                Button {
+                    repoDraft = vm.repo
+                    showSettings.toggle()
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .keyboardShortcut(",", modifiers: [.command])
+                .help("Settings (⌘,)")
+                .popover(isPresented: $showSettings, arrowEdge: .top) {
+                    settingsPopover
                 }
             }
             .padding(.horizontal, 10)
@@ -420,6 +469,49 @@ struct PRDashboard: View {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         return f.string(from: d)
+    }
+
+    private var settingsPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("GitHub Repository")
+                .font(.headline)
+            Text("Format: owner/repository (e.g. octocat/hello-world)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.pull")
+                    .foregroundColor(.secondary)
+                TextField("owner/repo", text: $repoDraft, onCommit: {
+                    saveRepo()
+                })
+                .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { showSettings = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { saveRepo() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isValidRepoDraft)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+
+    private var isValidRepoDraft: Bool {
+        let trimmed = repoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: "/")
+        return parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
+    }
+
+    private func saveRepo() {
+        guard isValidRepoDraft else { return }
+        vm.updateRepo(repoDraft)
+        showSettings = false
     }
 }
 
@@ -610,7 +702,7 @@ class GitHubPRLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         let r = BTTLauncherPluginResult()
         r.itemIdentifier    = "github-prs-root"
         r.title             = "GitHub PRs"
-        r.subtitle          = "Adobe-CreativeCloud / photoshop"
+        r.subtitle          = UserDefaults.standard.string(forKey: PRViewModel.repoUserDefaultsKey) ?? PRViewModel.defaultRepo
         r.systemImageName   = "arrow.triangle.pull"
         r.surfaceIdentifier = "github-prs"
         r.trailingHint      = "Open"

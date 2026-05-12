@@ -47,8 +47,9 @@ Source: [JiraLauncherPlugin.swift](JiraLauncherPlugin.swift)
 ### GitHub PR Monitor
 
 At-a-glance view of your open pull requests and review requests on a specific
-repo (currently `Adobe-CreativeCloud/photoshop` — change the constant
-`PRViewModel.repo` to retarget).
+repo. Set the target repo from the in-surface **Settings** popover (gear icon
+in the toolbar, or ⌘,). The value is stored in `UserDefaults` under
+`com.bttuserplugin.github.prmonitor.repo`.
 
 - Two sections: **My Open PRs** and **Review Requested**
 - Type in the launcher search box to filter by title / number / author
@@ -140,4 +141,4 @@ to build the bundle (name, identifier, type, icon, description).
 A few plugins read from environment / `UserDefaults`:
 
 - **Jira Issues** — `JIRA_TOKEN` env var, or set Base URL + PAT in the in-app Settings popover. JQL is also configurable.
-- **GitHub PR Monitor** — uses whatever the `gh` CLI is authenticated to. Repo is currently hardcoded; edit `PRViewModel.repo` to change.
+- **GitHub PR Monitor** — uses whatever the `gh` CLI is authenticated to. Target repo is configured via the in-surface Settings popover (⌘,).
