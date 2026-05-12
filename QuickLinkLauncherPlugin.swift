@@ -992,7 +992,16 @@ private struct QuickLinkEditorView: View {
         self.onSave = onSave
         self.onDelete = onDelete
         self.onCancel = onCancel
-        _draft = State(initialValue: initialDraft)
+
+        // If the editor opens with a pre-filled link (e.g. clipboard auto-fill)
+        // but no name yet, seed a suggested name now — onChange wouldn't fire
+        // for an initial value.
+        var seeded = initialDraft
+        if seeded.name.trimmingCharacters(in: .whitespaces).isEmpty,
+           let suggested = QuickLinkEditorView.suggestedTitle(forURLTemplate: seeded.urlTemplate) {
+            seeded.name = suggested
+        }
+        _draft = State(initialValue: seeded)
     }
 
     var body: some View {
