@@ -93,13 +93,16 @@ Source: [QuickLinkLauncherPlugin.swift](QuickLinkLauncherPlugin.swift)
 
 ### Stock Prices
 
-Look up any ticker and see a sparkline plus key stats.
+A managed stock watchlist with sparkline charts and detail views.
 
-- Type the symbol in the launcher search box; press **Return** to open the detail surface
-- Period switcher: 1D · 5D · 1M · 3M · 6M · 1Y · 5Y
-- Hover the sparkline to reveal price at that point
-- Change / change% / previous close / current price summary
-- Surface size is remembered across invocations
+- Single **Stocks** entry in the launcher opens the watchlist surface
+- Add/remove tickers inline — the list is persisted across launches (default seed: ADBE, AAPL, GOOGL, MSFT, AMZN, NVDA, TSLA, META)
+- **↑ / ↓** to navigate the watchlist, **Return** to open detail, **Esc** to go back (detail → list → close)
+- Quick-jump from the main launcher: type a tracked ticker prefix (e.g. `AAP`) to get direct results that open straight into the detail view
+- Detail view: range switcher (1D · 5D · 1M · 3M · 6M · 1Y · 5Y), interactive sparkline with hover-to-inspect, range-aware change/change%, plus prev close and current price
+- Watchlist + surface sizes are remembered across invocations
+
+![Stocks watchlist](docs/screenshots/stocks-watchlist.png)
 
 ![Stock detail view](docs/screenshots/stock-prices.png)
 
