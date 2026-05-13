@@ -978,9 +978,13 @@ struct JiraMainView: View {
         if let lastUpdated = vm.lastUpdated {
             Text("Updated \(relativeTime(lastUpdated))")
                 .font(.caption)
+                .monospacedDigit()
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                // Reserve a stable slot so the surrounding tab pills don't
+                // reflow as the relative time string grows ("0 sec" → "5 min").
+                .frame(width: 110, alignment: .trailing)
         }
 
         Button {
