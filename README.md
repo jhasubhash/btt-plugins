@@ -18,6 +18,7 @@ BTT recompiles the corresponding `.btt*plugin` bundle on disk automatically.
 | [Quick Links](#quick-links) | Launcher | Save reusable URL / path templates and open them with the right app |
 | [Stock Prices](#stock-prices) | Launcher | Quote lookup with sparkline + change/period stats |
 | [Kill Process](#kill-process) | Launcher | Browse running processes and kill / graceful-quit them |
+| [QuickTime Recording](#quicktime-recording) | Launcher | Start a QuickTime screen / audio / movie recording |
 | [Cursor Launcher](#cursor-launcher) | Launcher | Quick-open recent Cursor workspaces |
 | [VS Code Launcher](#vs-code-launcher) | Launcher | Quick-open recent VS Code workspaces |
 | [Xcode Recent Projects](#xcode-recent-projects) | Launcher | Quick-open recently used Xcode projects and workspaces |
@@ -125,6 +126,18 @@ A lightweight Activity Monitor inside the launcher.
 ![Kill Process](docs/screenshots/kill-process.png)
 
 Source: [KillProcess.swift](KillProcess.swift)
+
+---
+
+### QuickTime Recording
+
+Start a new QuickTime recording without hunting through the menu bar.
+
+- Three entries: **Start Screen Recording**, **Start Audio Recording**, **Start Movie Recording**
+- Activates QuickTime Player and clicks the matching `File › New … Recording` menu item via System Events
+- Uses QuickTime Player's app icon in the launcher
+
+Source: [QuickTimeRecording.swift](QuickTimeRecording.swift)
 
 ---
 
