@@ -20,6 +20,7 @@ BTT recompiles the corresponding `.btt*plugin` bundle on disk automatically.
 | [Kill Process](#kill-process) | Launcher | Browse running processes and kill / graceful-quit them |
 | [Cursor Launcher](#cursor-launcher) | Launcher | Quick-open recent Cursor workspaces |
 | [VS Code Launcher](#vs-code-launcher) | Launcher | Quick-open recent VS Code workspaces |
+| [Xcode Recent Projects](#xcode-recent-projects) | Launcher | Quick-open recently used Xcode projects and workspaces |
 | [Copy Path / URL](#copy-path--url) | Action | Copies the front app's document path or the active browser tab's URL |
 
 All launcher plugins surface as a single entry in BTT's universal launcher:
@@ -143,6 +144,19 @@ Same as the Cursor launcher, but for Visual Studio Code. Reads from VS Code's
 `storage.json` and opens via the `code` CLI.
 
 Source: [VSCodeLauncher.swift](VSCodeLauncher.swift)
+
+---
+
+### Xcode Recent Projects
+
+Searchable list of recently used Xcode projects and workspaces.
+
+- Single **Search Recent Projects** entry in the launcher (uses Xcode's app icon)
+- Children sourced from Spotlight metadata (`kMDItemLastUsedDate`), so the order tracks Xcode's own "Open Recent" menu without needing Full Disk Access
+- Both `.xcodeproj` and `.xcworkspace` files are included; embedded `project.xcworkspace` packages and `DerivedData/` paths are filtered out
+- **Return** opens the project in Xcode, **⌘R** reveals it in Finder
+
+Source: [XcodeRecentProjects.swift](XcodeRecentProjects.swift)
 
 ---
 
