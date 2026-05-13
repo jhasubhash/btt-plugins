@@ -19,6 +19,7 @@ BTT recompiles the corresponding `.btt*plugin` bundle on disk automatically.
 | [Stock Prices](#stock-prices) | Launcher | Quote lookup with sparkline + change/period stats |
 | [Kill Process](#kill-process) | Launcher | Browse running processes and kill / graceful-quit them |
 | [QuickTime Recording](#quicktime-recording) | Launcher | Start a QuickTime screen / audio / movie recording |
+| [News Search](#news-search) | Launcher | Search top news articles from the web with a rich preview surface |
 | [Cursor Launcher](#cursor-launcher) | Launcher | Quick-open recent Cursor workspaces |
 | [VS Code Launcher](#vs-code-launcher) | Launcher | Quick-open recent VS Code workspaces |
 | [Xcode Recent Projects](#xcode-recent-projects) | Launcher | Quick-open recently used Xcode projects and workspaces |
@@ -138,6 +139,26 @@ Start a new QuickTime recording without hunting through the menu bar.
 - Uses QuickTime Player's app icon in the launcher
 
 Source: [QuickTimeRecording.swift](QuickTimeRecording.swift)
+
+---
+
+### News Search
+
+Search top news articles from the web without leaving the launcher. Type your
+query, activate the **Search news for "..."** entry, and a rich Jira-style
+surface opens with the results.
+
+- Live Google News search (titles, source, snippet, relative time)
+- Toggle **Images** in the header to show per-source publisher logos; the
+  preference is remembered across invocations
+- ↑/↓ to navigate, **Return** to open the selected article in the browser
+  (closes the launcher automatically)
+- Subtle per-row accent colors and source pills for visual variety
+- Surface size is remembered across invocations
+
+![News Search](docs/screenshots/news-search.png)
+
+Source: [NewsSearchPlugin.swift](NewsSearchPlugin.swift)
 
 ---
 
