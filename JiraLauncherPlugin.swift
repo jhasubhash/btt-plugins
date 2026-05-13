@@ -969,6 +969,8 @@ struct JiraMainView: View {
             Text("Updated \(relativeTime(lastUpdated))")
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
 
         Button {
@@ -1022,8 +1024,14 @@ struct JiraMainView: View {
                     HStack(spacing: 6) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 11, weight: .semibold))
+                        // Always render at semibold to keep width stable across
+                        // selection changes; use opacity to dim unselected tabs
+                        // so the visual emphasis still tracks selection without
+                        // causing layout reflow / flicker.
                         Text(tab.title)
-                            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -1036,12 +1044,14 @@ struct JiraMainView: View {
                             .stroke(isSelected ? tab.tint : Color.clear, lineWidth: 1)
                     )
                     .foregroundColor(isSelected ? tab.tint : .primary)
+                    .opacity(isSelected ? 1.0 : 0.85)
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
+            Spacer(minLength: 12)
             toolbarButtons
         }
+        .animation(nil, value: vm.selectedTab)
     }
 
     // MARK: Custom JQL
