@@ -9,5 +9,6 @@
 
 # Track the README and its screenshots
 !README.md
+!LICENSE
 !.gitignore
 !docs/screenshots/*.png

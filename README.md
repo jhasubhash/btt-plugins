@@ -238,3 +238,9 @@ A few plugins read from environment / `UserDefaults`:
 
 - **Jira Issues** — `JIRA_TOKEN` env var, or set Base URL + PAT in the in-app Settings popover. JQL is also configurable.
 - **GitHub PR Monitor** — uses whatever the `gh` CLI is authenticated to. Target repo is configured via the in-surface Settings popover (⌘,).
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
