@@ -215,9 +215,13 @@ class PRViewModel: ObservableObject {
         }
     }
 
+    /// Invoked after `open(_:)` so the hosting surface can close the launcher.
+    var onAfterOpen: (() -> Void)?
+
     func open(_ pr: GitHubPR) {
         guard let url = URL(string: pr.url) else { return }
         NSWorkspace.shared.open(url)
+        onAfterOpen?()
     }
 }
 
@@ -720,6 +724,14 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     private let vm = PRViewModel()
 
     func makeLauncherSurfaceView() -> NSView {
+        // After opening a PR URL, close the launcher surface so the user is
+        // dropped straight back to the browser.
+        vm.onAfterOpen = { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                self?.delegate?.requestLauncherSurfaceClose()
+            }
+        }
+
         let hosting = FocusableHostingView(rootView: PRDashboard(vm: vm))
         hosting.onMoveUp        = { [weak vm] in
             DispatchQueue.main.async { vm?.navigateUp() }
@@ -784,7 +796,7 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
         if event.keyCode == 36 || event.keyCode == 76 {
             DispatchQueue.main.async { [weak self] in
                 self?.vm.openSelected()
-                self?.delegate?.requestLauncherSurfaceClose()
+                // open(_:) triggers onAfterOpen, which closes the surface.
             }
             return true
         }

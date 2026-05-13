@@ -672,6 +672,16 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     }
 
     func makeLauncherSurfaceView() -> NSView {
+        // Wrap the open-issue callback so the launcher closes after the
+        // browser is launched. The surface delegate (provided by BTT)
+        // exposes requestLauncherSurfaceClose() for exactly this purpose.
+        let openIssueAndClose: (String) -> Void = { [weak self] key in
+            self?.onOpenIssue(key)
+            DispatchQueue.main.async { [weak self] in
+                self?.delegate?.requestLauncherSurfaceClose()
+            }
+        }
+
         let vm = JiraMainViewModel(
             initialURL: initialURL,
             initialToken: initialToken,
@@ -679,7 +689,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
             initialState: initialState,
             onSaveConfig: onSaveConfig,
             onRefresh: onRefresh,
-            onOpenIssue: onOpenIssue
+            onOpenIssue: openIssueAndClose
         )
         self.vm = vm
         let hostingView = FocusableHostingView(rootView: JiraMainView(vm: vm))
