@@ -248,6 +248,10 @@ class JiraLauncherPlugin: NSObject, BTTLauncherPluginInterface {
     func launcherResultCommandSelected(_ result: BTTLauncherPluginResult,
                                        command: BTTLauncherPluginCommand,
                                        context: BTTLauncherPluginContext) {
+        // The "settings" command opens the jira-config surface via
+        // `command.surfaceIdentifier` — BTT handles the navigation; nothing
+        // to do here. Copy commands operate on the row's issue key.
+        if command.commandIdentifier == "settings" { return }
         guard let id = result.itemIdentifier else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -301,6 +305,22 @@ class JiraLauncherPlugin: NSObject, BTTLauncherPluginInterface {
         r.systemImageName = "list.bullet.rectangle"
         r.surfaceIdentifier = "jira-main"
         r.trailingHint = "Open"
+
+        // Expose configuration via the launcher's native ⌘P action popover
+        // (consistent with other plugins) instead of a custom gear button.
+        let settings = BTTLauncherPluginCommand()
+        settings.title             = "Settings"
+        settings.subtitle          = "Configure Base URL, PAT token, and JQL"
+        settings.systemImageName   = "gearshape.fill"
+        settings.commandIdentifier = "settings"
+        settings.surfaceIdentifier = "jira-config"
+        let shortcut = BTTLauncherPluginShortcut()
+        shortcut.character     = ","
+        shortcut.modifierFlags = [.command]
+        shortcut.displayKeys   = ["⌘", ","]
+        settings.shortcut = shortcut
+        r.commands = [settings]
+
         return r
     }
 
@@ -705,7 +725,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfacePreferredContentSize() -> CGSize { JiraSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned() -> Bool { false }
     func launcherSurfacePlaceholderText() -> String? { "Jira" }
-    func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  Cmd+R Refresh  |  Cmd+, Settings" }
+    func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  Cmd+R Refresh  |  Cmd+P Settings" }
 
     func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool {
         // Let BTT keep handling navigation keys (↑/↓/Return) so it can route
@@ -947,7 +967,6 @@ final class JiraMainViewModel: ObservableObject {
 
 struct JiraMainView: View {
     @ObservedObject var vm: JiraMainViewModel
-    @State private var showSettings: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -966,7 +985,6 @@ struct JiraMainView: View {
         .padding(.top, 10)
         .padding(.bottom, 16)
         .onAppear {
-            if !vm.canConnect { showSettings = true }
             vm.loadIfNeeded()
         }
     }
@@ -1004,26 +1022,6 @@ struct JiraMainView: View {
         .keyboardShortcut("r", modifiers: [.command])
         .disabled(vm.isLoading || !vm.canConnect)
         .help("Refresh (\u{2318}R)")
-
-        Button {
-            showSettings.toggle()
-        } label: {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.secondary.opacity(0.15))
-                )
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(",", modifiers: [.command])
-        .help("Settings (\u{2318},)")
-        .popover(isPresented: $showSettings, arrowEdge: .top) {
-            settingsPopover
-        }
     }
 
     // MARK: Tabs
@@ -1091,8 +1089,9 @@ struct JiraMainView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Configure Base URL and PAT token to load your assigned issues.")
                     .foregroundColor(.secondary)
-                Button("Open Settings") { showSettings = true }
-                    .buttonStyle(.borderedProminent)
+                Text("Press ⌘P to open Settings.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         } else if vm.isLoading && vm.issues.isEmpty {
             HStack(spacing: 10) {
@@ -1165,38 +1164,6 @@ struct JiraMainView: View {
         }
     }
 
-    // MARK: Settings Popover
-
-    private var settingsPopover: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Jira Connection")
-                .font(.headline)
-
-            LabeledConfigField(label: "Base URL", icon: "globe") {
-                TextField("https://jira.corp.YOUR_ORG.com", text: $vm.url)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            LabeledConfigField(label: "PAT Token", icon: "key.fill") {
-                SecureField("Paste your Jira PAT token", text: $vm.token)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { showSettings = false }
-                Button("Save") {
-                    vm.saveConfiguration()
-                    showSettings = false
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!vm.canConnect)
-            }
-        }
-        .padding(16)
-        .frame(width: 420)
-    }
 
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
