@@ -216,6 +216,9 @@ class JiraLauncherPlugin: NSObject, BTTLauncherPluginInterface {
                 },
                 onOpenIssue: { [weak self] key in
                     self?.openIssue(withKey: key)
+                },
+                onCopyIssueURL: { [weak self] key in
+                    self?.copyIssueURL(forKey: key)
                 }
             )
         }
@@ -295,6 +298,12 @@ class JiraLauncherPlugin: NSObject, BTTLauncherPluginInterface {
     private func openIssue(withKey key: String) {
         guard let url = URL(string: "\(jiraBaseURL)/browse/\(key)") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func copyIssueURL(forKey key: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("\(jiraBaseURL)/browse/\(key)", forType: .string)
     }
 
     private func makeMainResult() -> BTTLauncherPluginResult {
@@ -670,6 +679,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     private let onSaveConfig: (String, String, String) -> Void
     private let onRefresh: (String, Bool, @escaping (JiraSurfaceState) -> Void) -> Void
     private let onOpenIssue: (String) -> Void
+    private let onCopyIssueURL: (String) -> Void
     private var vm: JiraMainViewModel?
 
     fileprivate init(initialURL: String,
@@ -678,7 +688,8 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
          initialState: JiraSurfaceState,
          onSaveConfig: @escaping (String, String, String) -> Void,
          onRefresh: @escaping (String, Bool, @escaping (JiraSurfaceState) -> Void) -> Void,
-         onOpenIssue: @escaping (String) -> Void) {
+         onOpenIssue: @escaping (String) -> Void,
+         onCopyIssueURL: @escaping (String) -> Void) {
         self.initialURL = initialURL
         self.initialToken = initialToken
         self.initialJQL = initialJQL
@@ -686,6 +697,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
         self.onSaveConfig = onSaveConfig
         self.onRefresh = onRefresh
         self.onOpenIssue = onOpenIssue
+        self.onCopyIssueURL = onCopyIssueURL
     }
 
     func makeLauncherSurfaceView() -> NSView {
@@ -722,7 +734,7 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfacePreferredContentSize() -> CGSize { JiraSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned() -> Bool { false }
     func launcherSurfacePlaceholderText() -> String? { "Jira" }
-    func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  ⌘R Refresh  |  Esc + ⌘P for Settings" }
+    func launcherSurfaceFooterHint() -> String? { "Return Open Issue  |  ⌘C Copy URL  |  ⌘R Refresh  |  Esc + ⌘P for Settings" }
 
     func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool {
         // Let BTT keep handling navigation keys (↑/↓/Return) so it can route
@@ -763,6 +775,20 @@ final class JiraMainSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     // search field has focus.
     func handleLauncherRawKeyEvent(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
+
+        // ⌘C → copy selected issue's URL to clipboard. Intercept here so the
+        // launcher's search field can't swallow it.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command,
+           let chars = event.charactersIgnoringModifiers,
+           chars.lowercased() == "c" {
+            if let key = vm?.selectedIssueKey {
+                onCopyIssueURL(key)
+                return true
+            }
+            return false
+        }
+
         if event.keyCode == 36 || event.keyCode == 76 {
             DispatchQueue.main.async { [weak self] in
                 self?.vm?.openSelected()

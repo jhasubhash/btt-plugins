@@ -225,6 +225,17 @@ class PRViewModel: ObservableObject {
         }
     }
 
+    /// Copy the selected PR's URL to the clipboard. Returns true if a URL was copied.
+    @discardableResult
+    func copySelectedURL() -> Bool {
+        guard let id = selectedPRId,
+              let pr = allFiltered.first(where: { $0.id == id }) else { return false }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(pr.url, forType: .string)
+        return true
+    }
+
     /// Invoked after `open(_:)` so the hosting surface can close the launcher.
     var onAfterOpen: (() -> Void)?
 
@@ -716,7 +727,7 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     func launcherSurfacePreferredContentSize() -> CGSize { GitHubPRSurfaceSize.load() }
     func launcherSurfaceKeepsLauncherPinned()  -> Bool   { false }
     func launcherSurfacePlaceholderText()      -> String? { "Filter PRs…" }
-    func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  Esc + ⌘P for Settings" }
+    func launcherSurfaceFooterHint()           -> String? { "↑/↓ Navigate  ·  Return Open  ·  ⌘C Copy URL  ·  Esc + ⌘P for Settings" }
 
     func launcherSurfaceShouldBypassGlobalKeyboardHandling(for event: NSEvent) -> Bool {
         // Let BTT keep handling navigation keys (↑/↓/Return) so it can route
@@ -760,6 +771,17 @@ final class GitHubPRSurface: NSObject, BTTLauncherPluginSurfaceInterface {
     // search field has focus.
     func handleLauncherRawKeyEvent(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
+
+        // ⌘C → copy selected PR URL to clipboard. Intercept here so the
+        // launcher's search field can't swallow it.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command,
+           let chars = event.charactersIgnoringModifiers,
+           chars.lowercased() == "c" {
+            let copied = vm.copySelectedURL()
+            return copied
+        }
+
         if event.keyCode == 36 || event.keyCode == 76 {
             DispatchQueue.main.async { [weak self] in
                 self?.vm.openSelected()

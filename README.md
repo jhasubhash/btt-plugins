@@ -38,7 +38,7 @@ Browse and search your Jira issues without leaving the launcher.
 - Four built-in tabs: **Assigned to me**, **Reported by me**, **Watching**, **Custom JQL**
 - Inline filter — just start typing in the launcher search box; the list narrows live across key, summary, status, and type
 - ↑/↓ to navigate, **Return** to open in browser
-- `⌘R` Refresh · `⌘U` Copy URL · `⌘K` Copy key
+- `⌘C` Copy issue URL · `⌘R` Refresh · `⌘U` Copy URL · `⌘K` Copy key
 - Surface size is remembered across invocations
 - **Settings**: in the launcher list, select the **Jira Issues** row and press `⌘P` to open the action popover, then pick **Settings** to configure the Base URL and Personal Access Token. Auth can also be supplied via the `JIRA_TOKEN` env var.
 
@@ -59,7 +59,7 @@ value is stored in `UserDefaults` under
 
 - Two sections: **My Open PRs** and **Review Requested**
 - Type in the launcher search box to filter by title / number / author
-- ↑/↓ to navigate, **Return** to open the PR
+- ↑/↓ to navigate, **Return** to open the PR, `⌘C` to copy the PR URL
 - Uses the `gh` CLI under the hood, so it inherits your existing auth
 - Surface size is remembered across invocations
 
