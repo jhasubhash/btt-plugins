@@ -695,9 +695,7 @@ private final class QuickLinkEditorSurface: NSObject, BTTLauncherPluginSurfaceIn
         existingInstance == nil ? "Create Quick Link" : "Edit Quick Link"
     }
 
-    func launcherSurfaceFooterHint() -> String? {
-        "Use {argument}, {clipboard}, {finderPath}, {finderURL}, or any BTT variable."
-    }
+    func launcherSurfaceFooterHint() -> String? { nil }
 
     func launcherSurfaceStatusText() -> String? {
         statusText
@@ -1050,19 +1048,18 @@ private struct QuickLinkEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    formRow("Name") {
+                VStack(alignment: .leading, spacing: 14) {
+                    formRow("Name", icon: "textformat", tint: .blue) {
                         TextField("Quicklink name", text: $draft.name)
                             .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    formRow("Link") {
-                        VStack(alignment: .leading, spacing: 8) {
+                    formRow("Link", icon: "link", tint: .purple) {
+                        VStack(alignment: .leading, spacing: 6) {
                             TextField("https://google.com/search?q={argument}", text: $draft.urlTemplate)
                                 .textFieldStyle(.roundedBorder)
                                 .onChange(of: draft.urlTemplate) { newValue in
-                                    // Suggest a name when the user hasn't typed
-                                    // one yet — derived from host or filename.
                                     if draft.name.trimmingCharacters(in: .whitespaces).isEmpty,
                                        let suggested = QuickLinkEditorView.suggestedTitle(forURLTemplate: newValue) {
                                         draft.name = suggested
@@ -1073,11 +1070,10 @@ private struct QuickLinkEditorView: View {
                                 .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    formRow("Open With") {
-                        // Apps shown here are filtered by what the link looks
-                        // like (web URL, image, text/code, folder, generic file).
+                    formRow("Open With", icon: "app.badge", tint: .teal) {
                         let kindChoices = QuickLinkBrowserChoice.choices(
                             for: QuickLinkBrowserChoice.kind(forURLTemplate: draft.urlTemplate)
                         )
@@ -1087,17 +1083,15 @@ private struct QuickLinkEditorView: View {
                             }
                         }
                         .labelsHidden()
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .onChange(of: draft.urlTemplate) { _ in
-                            // If the previously selected app isn't applicable
-                            // to the new link kind, fall back to "default".
                             if !kindChoices.contains(where: { $0.id == draft.browserChoiceID }) {
                                 draft.browserChoiceID = "default"
                             }
                         }
                     }
 
-                    formRow("Icon") {
+                    formRow("Icon", icon: "paintpalette.fill", tint: .pink) {
                         Picker("", selection: $draft.systemImageName) {
                             ForEach(QuickLinkIconChoice.choices) { icon in
                                 Label(icon.title, systemImage: icon.systemImageName)
@@ -1105,65 +1099,113 @@ private struct QuickLinkEditorView: View {
                             }
                         }
                         .labelsHidden()
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    formRow("Display") {
+                    formRow("Display", icon: "eye.fill", tint: .orange) {
                         Picker("", selection: $draft.displayMode) {
                             ForEach(QuickLinkDisplayMode.allCases) { mode in
                                 Text(mode.title).tag(mode.rawValue)
                             }
                         }
                         .labelsHidden()
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     if let validationMessage {
-                        Text(validationMessage)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.red)
-                            .padding(.leading, 118)
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 11))
+                            Text(validationMessage)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.red)
+                        }
+                        .padding(.leading, 118)
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
-            HStack(spacing: 12) {
-                Label(isEditing ? "Edit Quick Link" : "Create Quick Link", systemImage: "link")
-                    .foregroundColor(.secondary)
-                Spacer()
-                if isEditing {
-                    Button(role: .destructive, action: onDelete) {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-                Button("Cancel", action: onCancel)
-                Button(isEditing ? "Save Quick Link" : "Create Quick Link") {
-                    save()
-                }
-                .keyboardShortcut(.return, modifiers: [])
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            footerBar
         }
         .frame(minWidth: 560)
     }
 
+    // MARK: - Sections
+
+    private var footerBar: some View {
+        let accent = headerAccent
+        return HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(accent)
+                Text(isEditing ? "Editing Quick Link" : "New Quick Link")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if isEditing {
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            Button("Cancel", action: onCancel)
+            Button(isEditing ? "Save Quick Link" : "Create Quick Link") {
+                save()
+            }
+            .keyboardShortcut(.return, modifiers: [])
+            .buttonStyle(.borderedProminent)
+            // Follow the Launcher's current theme color rather than the
+            // per-link-kind accent so buttons match the rest of the launcher UI.
+            .tint(Color.accentColor)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.04))
+    }
+
+    // MARK: - Helpers
+
+    /// The accent color used for the header/footer/preview. Matches the
+    /// per-link-kind tint so the editor visually adapts to whatever link
+    /// is being created.
+    private var headerAccent: Color {
+        switch QuickLinkBrowserChoice.kind(forURLTemplate: draft.urlTemplate) {
+        case .browser:   return .blue
+        case .image:     return .pink
+        case .textCode:  return .purple
+        case .folder:    return .orange
+        case .file:      return .teal
+        }
+    }
+
+    /// Compact one-line row: tinted label on the left at a fixed width, control
+    /// stretched leading on the right.
+    @ViewBuilder
     private func formRow<Content: View>(
         _ title: String,
+        icon: String,
+        tint: Color,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 18) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-                .frame(width: 100, alignment: .trailing)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(tint)
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(tint.opacity(0.85))
+            }
+            .frame(width: 110, alignment: .leading)
             content()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
