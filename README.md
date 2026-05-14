@@ -89,8 +89,8 @@ its own icon, keywords, and "Open With" target.
 - **Manage Quick Links** entry lists every saved link as native launcher rows — press `⌘P` on any row to access **Edit**, **Copy Resolved URL**, **Duplicate**, or **Delete**
 - Editor surface size is remembered across invocations
 
-![Quick Links editor](docs/screenshots/quick-links.png)
-![Manage Quick Links](docs/screenshots/quick-links-manage.png)
+![Quick Links editor](docs/screenshots/quick-links.png?v=2)
+![Manage Quick Links](docs/screenshots/quick-links-manage.png?v=2)
 
 Source: [QuickLinkLauncherPlugin.swift](QuickLinkLauncherPlugin.swift)
 
