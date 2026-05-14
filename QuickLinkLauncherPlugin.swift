@@ -16,7 +16,9 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
 
     private enum IDs {
         static let createItem = "create-quick-link"
+        static let manageItem = "manage-quick-links"
         static let editorSurface = "quick-link-editor"
+        static let manageChildren = "manage-children"
     }
 
     private enum Actions {
@@ -40,16 +42,40 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
     }
 
     func launcherResults(for context: BTTLauncherPluginContext) -> [BTTLauncherPluginResult]? {
-        let result = BTTLauncherPluginResult()
-        result.itemIdentifier = IDs.createItem
-        result.title = "Create Quick Link"
-        result.subtitle = "Save a reusable URL template as a launcher item."
-        result.systemImageName = "link.badge.plus"
-        result.keywords = ["quicklink", "quick link", "url", "bookmark", "browser", "web"]
-        result.trailingHint = "Create"
-        result.surfaceIdentifier = IDs.editorSurface
-        result.searchMatchPriority = NSNumber(value: 50)
-        return [result]
+        var results: [BTTLauncherPluginResult] = []
+
+        let create = BTTLauncherPluginResult()
+        create.itemIdentifier = IDs.createItem
+        create.title = "Create Quick Link"
+        create.subtitle = "Save a reusable URL template as a launcher item."
+        create.systemImageName = "link.badge.plus"
+        create.keywords = ["quicklink", "quick link", "url", "bookmark", "browser", "web", "create", "new"]
+        create.trailingHint = "Create"
+        create.surfaceIdentifier = IDs.editorSurface
+        create.searchMatchPriority = NSNumber(value: 50)
+        results.append(create)
+
+        // Only show "Manage" when there is at least one saved quick link.
+        let savedCount = delegate?
+            .launcherPluginInstances(forPluginIdentifier: Self.pluginIdentifier,
+                                     launcherID: context.launcherID)
+            .count ?? 0
+        if savedCount > 0 {
+            let manage = BTTLauncherPluginResult()
+            manage.itemIdentifier = IDs.manageItem
+            manage.title = "Manage Quick Links"
+            manage.subtitle = "Browse saved quick links (\(savedCount))."
+            manage.systemImageName = "slider.horizontal.3"
+            manage.keywords = ["quicklink", "quick link", "manage", "edit", "delete", "list"]
+            manage.trailingHint = "Manage"
+            // Use launcher children instead of a custom surface — this gives
+            // each row BTT's native ⌘P action popover for free.
+            manage.dynamicChildrenIdentifier = IDs.manageChildren
+            manage.searchMatchPriority = NSNumber(value: 50)
+            results.append(manage)
+        }
+
+        return results
     }
 
     func launcherResult(
@@ -133,6 +159,23 @@ final class QuickLinkLauncherPlugin: NSObject, BTTLauncherPluginInterface {
             context: context,
             existingInstance: context.launcherPluginInstance
         )
+    }
+
+    func launcherChildren(
+        forItemIdentifier itemIdentifier: String,
+        childrenIdentifier: String?,
+        context: BTTLauncherPluginContext
+    ) -> [BTTLauncherPluginResult]? {
+        guard itemIdentifier == IDs.manageItem || childrenIdentifier == IDs.manageChildren else {
+            return nil
+        }
+        let instances = delegate?
+            .launcherPluginInstances(forPluginIdentifier: Self.pluginIdentifier,
+                                     launcherID: context.launcherID) ?? []
+        // Each saved instance already builds a launcher result with its
+        // Edit / Copy URL / Duplicate / Delete commands attached via
+        // `launcherResult(for instance:context:)`.
+        return instances.compactMap { launcherResult(for: $0, context: context) }
     }
 
     func performAction(
@@ -1175,3 +1218,4 @@ private struct QuickLinkEditorView: View {
         return label.prefix(1).uppercased() + label.dropFirst()
     }
 }
+
