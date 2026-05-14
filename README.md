@@ -38,9 +38,9 @@ Browse and search your Jira issues without leaving the launcher.
 - Four built-in tabs: **Assigned to me**, **Reported by me**, **Watching**, **Custom JQL**
 - Inline filter — just start typing in the launcher search box; the list narrows live across key, summary, status, and type
 - ↑/↓ to navigate, **Return** to open in browser
-- `⌘R` Refresh · `⌘,` Settings · `⌘U` Copy URL · `⌘K` Copy key
+- `⌘R` Refresh · `⌘U` Copy URL · `⌘K` Copy key
 - Surface size is remembered across invocations
-- Auth via Jira Personal Access Token (set in the in-app Settings popover or via the `JIRA_TOKEN` env var)
+- **Settings**: in the launcher list, select the **Jira Issues** row and press `⌘P` to open the action popover, then pick **Settings** to configure the Base URL and Personal Access Token. Auth can also be supplied via the `JIRA_TOKEN` env var.
 
 ![Jira issue list](docs/screenshots/jira-issues.png)
 ![Jira connection settings](docs/screenshots/jira-settings.png)
@@ -52,8 +52,9 @@ Source: [JiraLauncherPlugin.swift](JiraLauncherPlugin.swift)
 ### GitHub PR Monitor
 
 At-a-glance view of your open pull requests and review requests on a specific
-repo. Set the target repo from the in-surface **Settings** popover (gear icon
-in the toolbar, or ⌘,). The value is stored in `UserDefaults` under
+repo. To set the target repo, select the **GitHub PRs** row in the launcher
+list and press `⌘P` to open the action popover, then pick **Settings**. The
+value is stored in `UserDefaults` under
 `com.bttuserplugin.github.prmonitor.repo`.
 
 - Two sections: **My Open PRs** and **Review Requested**
